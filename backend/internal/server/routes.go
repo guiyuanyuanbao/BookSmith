@@ -92,6 +92,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/books/{id}/stats", s.handleBookStats)
 	mux.HandleFunc("POST /api/books/{id}/download", s.handleBookDownload)
 	mux.HandleFunc("POST /api/books/{id}/export-now", s.handleExportNow)
+	mux.HandleFunc("POST /api/books/{id}/cover", s.handleCoverUpload)
+	mux.HandleFunc("GET /api/books/{id}/cover", s.handleCoverGet)
+	mux.HandleFunc("DELETE /api/books/{id}/cover", s.handleCoverDelete)
 	mux.HandleFunc("GET /api/books/{id}/toc", s.handleBookToc)
 	mux.HandleFunc("GET /api/books/{id}/chapters/{index}", s.handleChapter)
 

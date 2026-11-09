@@ -192,6 +192,8 @@ export interface Book {
   author: string
   kind?: string
   coverUrl?: string
+  /** 手动上传的封面文件名（存在则优先显示 /api/books/{id}/cover） */
+  localCover?: string
   intro?: string
   latestChapter?: string
   totalChapters: number
@@ -366,6 +368,13 @@ export const api = {
   listBooks: (params?: { keyword?: string; limit?: number; offset?: number }) =>
     apiGet<{ items: (Book & { stats?: BookStats })[]; total: number }>('/api/books', params),
   bookStats: (id: number) => apiGet<BookStats>(`/api/books/${id}/stats`),
+  // 手动上传封面（multipart；成功后封面地址 /api/books/{id}/cover?t=时间戳 防缓存）
+  uploadCover: (id: number, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return http.post(`/api/books/${id}/cover`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }) as Promise<ApiResult<{ localCover: string; url: string }>>
+  },
+  removeCover: (id: number) => apiDelete(`/api/books/${id}/cover`),
   bookDownload: (id: number, body: { formats: string[]; rangeStart?: number; rangeEnd?: number; concurrency?: number }) =>
     apiPost<{ taskId: number; existing: boolean }>(`/api/books/${id}/download`, body),
   exportNow: (id: number, formats: string[]) =>

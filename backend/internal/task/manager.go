@@ -37,6 +37,8 @@ type Manager struct {
 	TocTimeout time.Duration
 	// ChapterTimeout 单章抓取超时
 	ChapterTimeout time.Duration
+	// LocalCover 读取手动上传封面（main 装配 server 层实现，避免循环依赖）；nil 则无本地上传
+	LocalCover func(bookID int64) *export.CoverImage
 }
 
 // taskControl 运行中任务控制块。
@@ -519,6 +521,12 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (st
 			CoverURL:   book.CoverURL,
 			SourceName: book.OriginName,
 		},
+	}
+	// 手动上传的封面优先（EPUB/PDF 导出共用）
+	if m.LocalCover != nil {
+		if lc := m.LocalCover(book.ID); lc != nil {
+			ctxData.Book.LocalCover = lc
+		}
 	}
 	chapterList := make([]export.ChapterMeta, 0, len(allChapters))
 	curVolume := ""

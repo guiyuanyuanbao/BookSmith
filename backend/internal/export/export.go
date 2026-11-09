@@ -49,6 +49,8 @@ type BookMeta struct {
 	Author     string
 	Intro      string
 	CoverURL   string
+	// LocalCover 手动上传的封面（优先于 CoverURL）；nil 时回退远程下载
+	LocalCover *CoverImage
 	SourceName string // 书源名（导出文件名带源标记）
 	Chapters   []ChapterMeta
 }

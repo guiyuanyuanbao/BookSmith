@@ -74,6 +74,43 @@ function backToSources() {
   groupActiveSource.value = null
 }
 
+// ---------- 手动上传封面 ----------
+const coverFileInput = ref<HTMLInputElement | null>(null)
+const coverUploading = ref(false)
+
+async function onCoverFile(ev: Event, g: BookGroup) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.warning('封面文件不能超过 10MB')
+    return
+  }
+  coverUploading.value = true
+  try {
+    await api.uploadCover(g.primary.id, file)
+    ElMessage.success('封面已更新（导出的 EPUB/PDF 将使用新封面）')
+    await load(true)
+    syncDrawerTarget()
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  } finally {
+    coverUploading.value = false
+  }
+}
+
+async function removeCover(g: BookGroup) {
+  try {
+    await api.removeCover(g.primary.id)
+    ElMessage.success('已恢复使用书源远程封面')
+    await load(true)
+    syncDrawerTarget()
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  }
+}
+
 function downloadAll(list: { name: string }[]) {
   list.forEach((e, i) => {
     setTimeout(() => {
@@ -359,6 +396,13 @@ function phColor(name: string) {
   return phColors[h % phColors.length]
 }
 
+// 封面地址：手动上传（/api/books/{id}/cover）优先于远程 CoverURL（代理）
+// t 参数取 updatedAt，更换封面后立即失效缓存
+function coverSrc(g: BookGroup): string | null {
+  if (g.primary.localCover) return `/api/books/${g.primary.id}/cover?t=${g.primary.updatedAt ?? 0}`
+  return g.coverUrl ? coverProxy(g.coverUrl) : null
+}
+
 function progressOf(sb: SourceBook): number {
   const s = sb.stats
   if (!s || s.totalChapters === 0) return 0
@@ -474,8 +518,8 @@ onBeforeUnmount(() => {
       >
         <div class="tile-cover">
           <img
-            v-if="g.coverUrl"
-            :src="coverProxy(g.coverUrl)"
+            v-if="coverSrc(g)"
+            :src="coverSrc(g) ?? undefined"
             loading="lazy"
             @error="($event.target as HTMLImageElement).style.display = 'none'"
           />
@@ -524,8 +568,8 @@ onBeforeUnmount(() => {
       <div v-for="g in sortedGroups" :key="g.primary.id" class="book-card" style="margin-bottom: 12px">
         <div class="cover">
           <img
-            v-if="g.coverUrl"
-            :src="coverProxy(g.coverUrl)"
+            v-if="coverSrc(g)"
+            :src="coverSrc(g) ?? undefined"
             loading="lazy"
             @error="($event.target as HTMLImageElement).style.display = 'none'"
           />
@@ -631,6 +675,30 @@ onBeforeUnmount(() => {
 
         <!-- 视图1：来源列表 -->
         <template v-if="groupView === 'sources'">
+          <!-- 封面管理：预览 + 上传 + 移除 -->
+          <div class="drawer-cover">
+            <img v-if="coverSrc(groupDlgTarget)" :src="coverSrc(groupDlgTarget)!" class="drawer-cover-img" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+            <span v-else class="drawer-cover-img cover-ph" :style="{ background: phColor(groupDlgTarget.primary.name) }">书</span>
+            <div class="drawer-cover-ops">
+              <div class="drawer-cover-name">
+                {{ groupDlgTarget.primary.localCover ? '已使用手动上传的封面' : '使用书源远程封面' }}
+              </div>
+              <div style="display: flex; gap: 8px">
+                <el-button size="small" type="primary" plain :loading="coverUploading" @click="coverFileInput?.click()">
+                  {{ groupDlgTarget.primary.localCover ? '更换封面' : '上传封面' }}
+                </el-button>
+                <el-button v-if="groupDlgTarget.primary.localCover" size="small" plain @click="removeCover(groupDlgTarget)">恢复远程</el-button>
+              </div>
+              <input
+                ref="coverFileInput"
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                style="display: none"
+                @change="onCoverFile($event, groupDlgTarget)"
+              />
+            </div>
+          </div>
+
           <div v-for="sb in groupDlgTarget.sources" :key="sb.id" class="ms-row">
             <div class="ms-main">
               <div class="ms-head">
@@ -863,6 +931,30 @@ onBeforeUnmount(() => {
 /* 多源抽屉 */
 .drawer-body { padding: 4px; }
 .drawer-head { margin-bottom: 14px; }
+/* 封面管理区 */
+.drawer-cover {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  background: var(--el-fill-color-light, #f4f1ea);
+  border-radius: 12px;
+  margin-bottom: 14px;
+}
+.drawer-cover-img {
+  width: 72px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 24px;
+}
+.drawer-cover-ops { display: flex; flex-direction: column; gap: 8px; }
+.drawer-cover-name { font-size: 12.5px; color: var(--bs-text-sub); }
 .drawer-title { margin-top: 4px; }
 .drawer-book {
   font-family: 'Noto Serif SC', serif;

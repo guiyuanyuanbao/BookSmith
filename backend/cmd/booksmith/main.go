@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"booksmith/internal/export"
 	"booksmith/internal/httpx"
 	"booksmith/internal/jsenv"
 	"booksmith/internal/model"
@@ -74,6 +76,28 @@ func main() {
 	// 任务管理器
 	bus := task.NewEventBus()
 	taskMgr := task.New(st, svc, bus, filepath.Join(*dataDir, "downloads"))
+	// 手动上传封面读取（导出用）：data/uploads/{id}.ext，Book.LocalCover 指向文件名
+	taskMgr.LocalCover = func(bookID int64) *export.CoverImage {
+		b, err := st.GetBook(bookID)
+		if err != nil || b.LocalCover == "" {
+			return nil
+		}
+		data, err := os.ReadFile(filepath.Join(*dataDir, "uploads", filepath.Base(b.LocalCover)))
+		if err != nil || len(data) == 0 {
+			return nil
+		}
+		ct := export.SniffImageMime(data)
+		ext := ".jpg"
+		switch {
+		case strings.Contains(ct, "png"):
+			ext = ".png"
+		case strings.Contains(ct, "gif"):
+			ext = ".gif"
+		case strings.Contains(ct, "webp"):
+			ext = ".webp"
+		}
+		return &export.CoverImage{Data: data, MimeType: ct, Ext: ext}
+	}
 
 	app := &server.App{
 		SourceMgr:   srcMgr,

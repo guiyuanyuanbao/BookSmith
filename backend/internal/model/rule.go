@@ -53,6 +53,7 @@ type Book struct {
 	Author        string `json:"author"`
 	Kind          string `json:"kind"` // 分类（逗号分隔）
 	CoverURL      string `json:"coverUrl"`
+	LocalCover    string `json:"localCover,omitempty"` // 手动上传的封面文件名（存于 data/uploads，优先于 CoverURL）
 	Intro         string `json:"intro"`
 	LatestChapter string `json:"latestChapter"`
 	WordCount     string `json:"wordCount"`

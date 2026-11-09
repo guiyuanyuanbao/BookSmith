@@ -87,10 +87,12 @@ func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 		font = "Helvetica"
 	}
 
-	// 封面页：优先绘制真实封面图，失败退化为文字封面
+	// 封面页：优先绘制真实封面图，失败退化为文字封面（手动上传优先于远程下载）
 	pdf.AddPage()
 	var cover *CoverImage
-	if ctx.Book.CoverURL != "" {
+	if ctx.Book.LocalCover != nil {
+		cover = ctx.Book.LocalCover
+	} else if ctx.Book.CoverURL != "" {
 		cover = DownloadCover(ctx.Book.CoverURL)
 	}
 	if cover != nil && useUnicode {

@@ -82,7 +82,7 @@ func DownloadCover(rawURL string) *CoverImage {
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if ct == "" || ct == "application/octet-stream" || ct == "text/html" {
-		ct = sniffImageMime(data)
+		ct = SniffImageMime(data)
 	}
 	if ct == "text/html" {
 		return nil // HTML 错误页不是图片
@@ -100,7 +100,7 @@ func DownloadCover(rawURL string) *CoverImage {
 }
 
 // sniffImageMime 从字节头嗅探图片类型。
-func sniffImageMime(d []byte) string {
+func SniffImageMime(d []byte) string {
 	switch {
 	case len(d) > 3 && d[0] == 0xFF && d[1] == 0xD8:
 		return "image/jpeg"

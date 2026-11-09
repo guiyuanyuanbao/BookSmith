@@ -92,6 +92,10 @@ docker build -t booksmith .
 docker run -d -p 18500:18500 -v booksmith-data:/data booksmith
 ```
 
+### 手动上传封面
+
+书架打开任意书的多源抽屉，顶部即封面管理区：**上传封面**（jpg/png/gif/webp，≤10MB）后书架卡片立即更换，导出的 EPUB/PDF 也将嵌入该封面；「恢复远程」一键切回书源封面。API：`POST/GET/DELETE /api/books/{id}/cover`。
+
 ### 公网部署与访问鉴权
 
 设置 `BOOKSMITH_API_KEY` 环境变量即开启访问保护：打开页面会要求输入密钥，全部 API 需要携带密钥；**不设置则完全关闭鉴权**（本地使用无需任何配置）。

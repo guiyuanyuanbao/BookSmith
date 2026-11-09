@@ -57,9 +57,11 @@ func (e *EPUBExporter) Export(ctx *ExportContext, w io.Writer) error {
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
-	// 下载封面图（失败不中断导出，退化为文字封面）
+	// 封面：手动上传优先，否则下载远程（失败不中断导出，退化为文字封面）
 	var cover *CoverImage
-	if ctx.Book.CoverURL != "" {
+	if ctx.Book.LocalCover != nil {
+		cover = ctx.Book.LocalCover
+	} else if ctx.Book.CoverURL != "" {
 		cover = DownloadCover(ctx.Book.CoverURL)
 	}
 
