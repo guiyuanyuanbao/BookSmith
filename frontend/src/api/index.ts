@@ -270,10 +270,17 @@ export interface DebugTrace {
 
 // ---------------- 工具 ----------------
 
+// 附加访问密钥到 URL（img/EventSource/a 标签等无法设请求头的场景）
+export function withKey(u: string): string {
+  const k = getApiKey()
+  if (!k) return u
+  return u + (u.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(k)
+}
+
 // 封面代理地址（绕过防盗链；无封面返回空串）
 export function coverProxy(u?: string | null): string {
   if (!u) return ''
-  return `/api/cover?url=${encodeURIComponent(u)}`
+  return withKey(`/api/cover?url=${encodeURIComponent(u)}`)
 }
 
 // SSE 事件订阅。
@@ -285,7 +292,7 @@ export function subscribeEvents(handlers: {
   onSearchDone?: (data: any) => void
   onCleanupProgress?: (data: any) => void
 }): () => void {
-  const es = new EventSource('/api/events')
+  const es = new EventSource(withKey('/api/events'))
   const bind = (name: string, fn?: (d: any) => void) => {
     es.addEventListener(name, (e) => {
       try {
@@ -321,7 +328,7 @@ export const api = {
     apiPost<ImportResult>('/api/sources/import', body),
   syncRepo: (url: string) => apiPost<ImportResult>('/api/sources/sync', { url }),
   repos: () => apiGet<SourceRepo[]>('/api/sources/repos'),
-  exportSources: () => `/api/sources/export`,
+  exportSources: () => withKey(`/api/sources/export`),
   setSourceEnabled: (url: string, enabled: boolean) =>
     apiPatch(`/api/sources/${encodeURIComponent(url)}`, { enabled }),
   deleteSource: (url: string) => apiDelete(`/api/sources/${encodeURIComponent(url)}`),
@@ -430,5 +437,5 @@ export const api = {
   putSettings: (s: Record<string, string>) => apiPut<Record<string, string>>('/api/settings', s),
 
 
-  fileUrl: (name: string) => `/api/files/${encodeURIComponent(name)}`,
+  fileUrl: (name: string) => withKey(`/api/files/${encodeURIComponent(name)}`),
 }

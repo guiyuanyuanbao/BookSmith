@@ -236,7 +236,7 @@ async function syncRepo(repo: SourceRepo) {
 }
 
 function exportAll() {
-  window.open('/api/sources/export', '_blank')
+  window.open(api.exportSources(), '_blank')
 }
 
 // 校验当前页全部书源

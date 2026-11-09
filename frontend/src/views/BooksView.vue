@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, coverProxy, subscribeEvents, type BookGroup, type Chapter, type SourceBook } from '@/api'
+import { api, coverProxy, subscribeEvents, withKey, type BookGroup, type Chapter, type SourceBook } from '@/api'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 import { useRouter } from 'vue-router'
@@ -399,7 +399,7 @@ function phColor(name: string) {
 // 封面地址：手动上传（/api/books/{id}/cover）优先于远程 CoverURL（代理）
 // t 参数取 updatedAt，更换封面后立即失效缓存
 function coverSrc(g: BookGroup): string | null {
-  if (g.primary.localCover) return `/api/books/${g.primary.id}/cover?t=${g.primary.updatedAt ?? 0}`
+  if (g.primary.localCover) return withKey(`/api/books/${g.primary.id}/cover?t=${g.primary.updatedAt ?? 0}`)
   return g.coverUrl ? coverProxy(g.coverUrl) : null
 }
 
