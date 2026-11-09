@@ -839,41 +839,66 @@ func (s *Store) AddExport(taskID, bookID int64, name, format, path string, size 
 }
 
 // ListExports 导出记录。
-func (s *Store) ListExports(limit int) ([]map[string]any, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := s.db.Query(`SELECT id,task_id,book_id,name,format,size,path,created_at FROM exports ORDER BY id DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+// scanExportRow 扫描导出行并组装输出（originName 从任务 JSON 提取，供前端显示来源）。
+func scanExportRow(rows *sql.Rows) ([]map[string]any, error) {
 	var out []map[string]any
 	for rows.Next() {
 		var id, taskID, bookID, size, createdAt int64
 		var name, format, path string
-		if err := rows.Scan(&id, &taskID, &bookID, &name, &format, &size, &path, &createdAt); err != nil {
+		var taskData []byte
+		if err := rows.Scan(&id, &taskID, &bookID, &name, &format, &size, &path, &createdAt, &taskData); err != nil {
 			return nil, err
+		}
+		originName := ""
+		var td struct {
+			OriginName string `json:"originName"`
+		}
+		if json.Unmarshal(taskData, &td) == nil {
+			originName = td.OriginName
 		}
 		out = append(out, map[string]any{
 			"id": id, "taskId": taskID, "bookId": bookID, "name": name,
 			"format": format, "size": size, "path": path, "createdAt": createdAt,
+			"originName": originName,
 		})
 	}
 	return out, rows.Err()
 }
 
+func (s *Store) ListExports(limit int) ([]map[string]any, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.Query(`SELECT e.id,e.task_id,e.book_id,e.name,e.format,e.size,e.path,e.created_at,t.data
+		FROM exports e LEFT JOIN tasks t ON t.id=e.task_id ORDER BY e.id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanExportRow(rows)
+}
+
 // GetExport 单条导出记录（含 path/name/format 等）。
 func (s *Store) GetExport(id int64) (map[string]any, error) {
-	row := s.db.QueryRow(`SELECT id,task_id,book_id,name,format,size,path,created_at FROM exports WHERE id=?`, id)
+	row := s.db.QueryRow(`SELECT e.id,e.task_id,e.book_id,e.name,e.format,e.size,e.path,e.created_at,t.data
+		FROM exports e LEFT JOIN tasks t ON t.id=e.task_id WHERE e.id=?`, id)
 	var id_, taskID, bookID, size, createdAt int64
 	var name, format, path string
-	if err := row.Scan(&id_, &taskID, &bookID, &name, &format, &size, &path, &createdAt); err != nil {
+	var taskData []byte
+	if err := row.Scan(&id_, &taskID, &bookID, &name, &format, &size, &path, &createdAt, &taskData); err != nil {
 		return nil, err
+	}
+	originName := ""
+	var td struct {
+		OriginName string `json:"originName"`
+	}
+	if json.Unmarshal(taskData, &td) == nil {
+		originName = td.OriginName
 	}
 	return map[string]any{
 		"id": id_, "taskId": taskID, "bookId": bookID, "name": name,
 		"format": format, "size": size, "path": path, "createdAt": createdAt,
+		"originName": originName,
 	}, nil
 }
 
@@ -964,24 +989,13 @@ func (s *Store) ListExportsByBook(bookID int64, limit int) ([]map[string]any, er
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := s.db.Query(`SELECT id,task_id,book_id,name,format,size,path,created_at FROM exports WHERE book_id=? ORDER BY id DESC LIMIT ?`, bookID, limit)
+	rows, err := s.db.Query(`SELECT e.id,e.task_id,e.book_id,e.name,e.format,e.size,e.path,e.created_at,t.data
+		FROM exports e LEFT JOIN tasks t ON t.id=e.task_id WHERE e.book_id=? ORDER BY e.id DESC LIMIT ?`, bookID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []map[string]any
-	for rows.Next() {
-		var id, taskID, bID, size, createdAt int64
-		var name, format, path string
-		if err := rows.Scan(&id, &taskID, &bID, &name, &format, &size, &path, &createdAt); err != nil {
-			return nil, err
-		}
-		out = append(out, map[string]any{
-			"id": id, "taskId": taskID, "bookId": bID, "name": name,
-			"format": format, "size": size, "path": path, "createdAt": createdAt,
-		})
-	}
-	return out, rows.Err()
+	return scanExportRow(rows)
 }
 
 // BatchSourceAction 批量启用/禁用/删除书源，返回成功数。

@@ -13,6 +13,7 @@ interface ExportItem {
   format: string
   size: number
   createdAt: number
+  originName?: string
 }
 
 const items = ref<ExportItem[]>([])
@@ -121,7 +122,7 @@ const tasksStore = useTasksStore()
         </el-tag>
         <div class="file-main">
           <div class="file-name" :title="e.name">{{ e.name }}</div>
-          <div class="muted file-meta">{{ fmtSize(e.size) }} · {{ fmtTime(e.createdAt) }}</div>
+          <div class="muted file-meta">{{ fmtSize(e.size) }} · {{ fmtTime(e.createdAt) }}<template v-if="e.originName"> · 来源 {{ e.originName }}</template></div>
         </div>
         <a :href="api.fileUrl(e)" target="_blank">
           <el-button type="primary" size="small" plain>下载</el-button>

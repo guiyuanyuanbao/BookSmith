@@ -566,13 +566,15 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (st
 		if err := exp.Export(ctxData, &buf); err != nil {
 			return "", fmt.Errorf("%s 导出失败: %w", f, err)
 		}
-		name := util.SanitizeFileName(export.FileName(ctxData, exp.Ext()))
-		// 目录管理：downloads/{书名(作者)}/{文件名} —— 同书多源的文件聚在一个书目录下
+		// 目录管理：downloads/{书名(作者)}/{源名}/{书名(作者)}.ext
+		// 文件名不含源名（来源在目录层级中），同书同源重导出覆盖旧文件
 		bookDir := util.SanitizeFileName(book.Name + "(" + book.Author + ")")
-		dir := filepath.Join(m.outDir, bookDir)
+		srcDir := util.SanitizeFileName(book.OriginName)
+		dir := filepath.Join(m.outDir, bookDir, srcDir)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
+		name := util.SanitizeFileName(book.Name + "(" + book.Author + ")." + exp.Ext())
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 			return "", err
