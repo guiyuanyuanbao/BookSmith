@@ -30,6 +30,7 @@ COPY --from=backend /booksmith /app/booksmith
 # 数据目录（书籍缓存 / 导出文件 / SQLite）
 RUN mkdir -p /data/downloads && chown -R booksmith:booksmith /data
 USER booksmith
+# BOOKSMITH_API_KEY：可选访问密钥（设置后全部接口需鉴权，公网部署推荐）
 ENV BOOKSMITH_DATA=/data
 EXPOSE 18500
 VOLUME ["/data"]

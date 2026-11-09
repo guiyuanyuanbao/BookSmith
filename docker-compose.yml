@@ -1,0 +1,19 @@
+# BookSmith docker compose 部署
+# 公网部署：修改 BOOKSMITH_API_KEY 为你的访问密钥（登录页面输入的密钥）
+services:
+  booksmith:
+    image: ghcr.io/guiyuanyuanbao/booksmith:latest
+    container_name: booksmith
+    restart: unless-stopped
+    ports:
+      - "18500:18500"
+    environment:
+      # 访问密钥：设置后打开页面需输入该密钥；留空则不启用鉴权（仅建议本机使用）
+      - BOOKSMITH_API_KEY=change-me-to-a-long-random-key
+      # 时区（可选）
+      - TZ=Asia/Shanghai
+    volumes:
+      - booksmith-data:/data
+
+volumes:
+  booksmith-data:

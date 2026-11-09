@@ -7,11 +7,36 @@ export interface ApiResult<T = any> {
   data: T
 }
 
+// 鉴权：密钥存 localStorage，全部请求自动携带 X-API-Key
+const AUTH_KEY = 'booksmith_api_key'
+export function getApiKey(): string {
+  return localStorage.getItem(AUTH_KEY) || ''
+}
+export function setApiKey(k: string) {
+  if (k) localStorage.setItem(AUTH_KEY, k)
+  else localStorage.removeItem(AUTH_KEY)
+}
+
 const http = axios.create({ timeout: 180_000 })
 
+// 请求拦截：自动带密钥
+http.interceptors.request.use((cfg) => {
+  const k = getApiKey()
+  if (k) cfg.headers['X-API-Key'] = k
+  return cfg
+})
+
+// 响应拦截：401 → 清 token 跳登录页
 http.interceptors.response.use(
   (resp) => resp.data,
   (err) => {
+    if (err?.response?.status === 401) {
+      setApiKey('')
+      if (!location.pathname.startsWith('/login')) {
+        location.href = '/login'
+      }
+      return Promise.reject(new Error('密钥无效，请重新登录'))
+    }
     const msg = err?.response?.data?.errorMsg || err.message || '请求失败'
     return Promise.reject(new Error(msg))
   },
@@ -282,6 +307,10 @@ export function subscribeEvents(handlers: {
 
 export const api = {
   health: () => apiGet('/api/health'),
+
+  // 鉴权
+  authStatus: () => apiGet<{ required: boolean }>('/api/auth/status'),
+  authLogin: (key: string) => apiPost<{ required: boolean; ok?: boolean }>('/api/auth/login', { key }),
 
   // 书源
   listSources: (params?: { keyword?: string; enabled?: number; limit?: number; offset?: number }) =>

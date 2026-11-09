@@ -27,8 +27,16 @@ func main() {
 	var (
 		addr    = flag.String("addr", ":8484", "监听地址")
 		dataDir = flag.String("data", "", "数据目录（默认 ./data）")
+		apiKey  = flag.String("api-key", "", "API 密钥（公网部署用；也可用环境变量 BOOKSMITH_API_KEY）")
 	)
 	flag.Parse()
+
+	if *apiKey == "" {
+		*apiKey = os.Getenv("BOOKSMITH_API_KEY")
+	}
+	if *apiKey != "" {
+		log.Printf("鉴权已启用（API Key 保护全部接口）")
+	}
 
 	if *dataDir == "" {
 		*dataDir = "data"
@@ -92,12 +100,18 @@ func main() {
 	srv.Routes(mux)
 	mux.Handle("/", staticHandler)
 
+	// 鉴权：密钥未配置时完全放行（本地使用）；配置后保护页面与全部 API
+	auth := server.NewAuth(*apiKey)
+	mux.HandleFunc("POST /api/auth/login", auth.LoginHandler)
+	mux.HandleFunc("GET /api/auth/status", auth.StatusHandler)
+	handler := auth.Middleware(mux)
+
 	log.Printf("BookSmith %s 启动于 http://localhost%s", version, *addr)
 	log.Printf("数据目录: %s", *dataDir)
 
 	s := &http.Server{
 		Addr:              *addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	if err := s.ListenAndServe(); err != nil {

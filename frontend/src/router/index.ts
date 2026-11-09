@@ -12,6 +12,7 @@ const router = createRouter({
     { path: '/books', name: 'books', component: () => import('@/views/BooksView.vue'), meta: { title: '书架' } },
     { path: '/tasks', name: 'tasks', component: () => import('@/views/TasksView.vue'), meta: { title: '下载任务' } },
     { path: '/files', name: 'files', component: () => import('@/views/FilesView.vue'), meta: { title: '导出文件' } },
+    { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
   ],
 })
 

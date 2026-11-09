@@ -92,6 +92,27 @@ docker build -t booksmith .
 docker run -d -p 18500:18500 -v booksmith-data:/data booksmith
 ```
 
+### 公网部署与访问鉴权
+
+设置 `BOOKSMITH_API_KEY` 环境变量即开启访问保护：打开页面会要求输入密钥，全部 API 需要携带密钥；**不设置则完全关闭鉴权**（本地使用无需任何配置）。
+
+docker compose（推荐，见仓库 `docker-compose.yml`）：
+
+```yaml
+services:
+  booksmith:
+    image: ghcr.io/guiyuanyuanbao/booksmith:latest
+    ports: ["18500:18500"]
+    environment:
+      - BOOKSMITH_API_KEY=change-me-to-a-long-random-key
+    volumes:
+      - booksmith-data:/data
+```
+
+或直接 `docker run -e BOOKSMITH_API_KEY=your-key ...`。也可用启动参数 `--api-key your-key`。
+
+技术细节：密钥经 `X-API-Key` 头（或 `?key=` 参数、Bearer token）传递，常量时间比较防时序攻击；SPA 路由与静态资源放行、登录端点 `/api/auth/login`、状态端点 `/api/auth/status` 免鉴权。
+
 ### CI
 
 `.github/workflows/ci.yml`：push/PR 时运行 Go 测试与前端类型检查；通过后构建多架构镜像（amd64/arm64）发布到 GHCR，标签规则：分支名 / `v*` 语义化版本 / `latest`（默认分支）。

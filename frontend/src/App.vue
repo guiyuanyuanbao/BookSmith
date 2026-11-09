@@ -49,7 +49,11 @@ const navs = computed(() => [
 </script>
 
 <template>
-  <el-container style="height: 100%">
+  <!-- 登录页独立全屏布局（无侧栏） -->
+  <div v-if="route.path === '/login'" style="height: 100%">
+    <router-view />
+  </div>
+  <el-container v-else style="height: 100%">
     <el-aside :width="collapsed ? '64px' : '216px'" class="sidebar">
       <div class="logo" :class="{ mini: collapsed }">
         <span class="logo-icon">📚</span>
@@ -80,8 +84,8 @@ const navs = computed(() => [
       </router-view>
     </el-main>
   </el-container>
-  <!-- 全局下载任务浮窗：跨页面持续可见 -->
-  <DownloadPanel />
+  <!-- 全局下载任务浮窗：跨页面持续可见（登录页不显示） -->
+  <DownloadPanel v-if="route.path !== '/login'" />
 </template>
 
 <style scoped>
