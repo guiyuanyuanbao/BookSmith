@@ -653,8 +653,8 @@ func (s *Store) ResetFailedChapters(bookID int64) error {
 // CountChapterStatus 统计章节状态。
 func (s *Store) CountChapterStatus(bookID int64) (total, done, failed int, err error) {
 	err = s.db.QueryRow(`SELECT COUNT(*),
-		SUM(CASE WHEN status=2 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status=3 THEN 1 ELSE 0 END)
+		COALESCE(SUM(CASE WHEN status=2 THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status=3 THEN 1 ELSE 0 END), 0)
 		FROM chapters WHERE book_id=? AND is_volume=0`, bookID).Scan(&total, &done, &failed)
 	return
 }
@@ -934,32 +934,43 @@ func (s *Store) DeleteExportsByBook(bookID int64) ([]string, error) {
 // SweepGhostExports 启动一致性清理：删除指向不存在文件的导出记录，
 // 以及同一路径的重复旧记录（保留最新一条）。返回清理条数。
 func (s *Store) SweepGhostExports() (int, error) {
-	rows, err := s.db.Query(`SELECT id, path FROM exports ORDER BY id ASC`)
+	rows, err := s.db.Query(`SELECT e.id, e.path, b.id FROM exports e
+		LEFT JOIN books b ON b.id = e.book_id
+		ORDER BY e.id ASC`)
 	if err != nil {
 		return 0, err
 	}
 	type rec struct {
-		id   int64
-		path string
+		id       int64
+		path     string
+		bookGone bool // 书已删除（级联后导出记录成为孤儿）
 	}
 	var recs []rec
 	for rows.Next() {
 		var r rec
-		if err := rows.Scan(&r.id, &r.path); err == nil {
+		var bookID sql.NullInt64
+		if err := rows.Scan(&r.id, &r.path, &bookID); err == nil {
+			r.bookGone = !bookID.Valid // 书已删除 → books 行不存在（b.id 为 NULL）
 			recs = append(recs, r)
 		}
 	}
 	rows.Close()
 
-	// 同路径保留最大 id；文件不存在的直接删
+	// 同路径保留最大 id；文件不存在的直接删；书已删的孤儿记录连文件一起删
 	latestByPath := map[string]int64{}
 	for _, r := range recs {
-		if r.id > latestByPath[r.path] {
+		if !r.bookGone && r.id > latestByPath[r.path] {
 			latestByPath[r.path] = r.id
 		}
 	}
 	var del []int64
+	var delFiles []string
 	for _, r := range recs {
+		if r.bookGone {
+			del = append(del, r.id) // 孤儿记录（书已删除）
+			delFiles = append(delFiles, r.path)
+			continue
+		}
 		if _, err := os.Stat(r.path); err != nil {
 			del = append(del, r.id) // 幽灵记录（文件已丢失）
 			continue
@@ -981,7 +992,14 @@ func (s *Store) SweepGhostExports() (int, error) {
 			return 0, err
 		}
 	}
-	return len(del), tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	// 孤儿记录对应的磁盘文件一并清理
+	for _, p := range delFiles {
+		_ = os.Remove(p)
+	}
+	return len(del), nil
 }
 
 // ListExportsByBook 按书过滤导出记录。
