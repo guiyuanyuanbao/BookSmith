@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -524,14 +525,10 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		ct = "text/markdown; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+urlEscape(name))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	_, _ = w.Write(data)
 }
 
-func urlEscape(s string) string {
-	r := strings.NewReplacer("%", "%25", " ", "%20", `"`, "%28", "(", "%29", ")", "%29")
-	return r.Replace(s)
-}
 
 // handleExportFileDownload GET /api/exports/{id}/file —— 按导出记录下载文件。
 // 文件实际位于 downloads/{书名(作者)}/ 子目录，path 记录在 exports 表，无需前端拼子目录。
@@ -566,6 +563,6 @@ func (s *Server) handleExportFileDownload(w http.ResponseWriter, r *http.Request
 		ct = "text/markdown; charset=utf-8"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+urlEscape(name))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	_, _ = w.Write(data)
 }
