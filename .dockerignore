@@ -1,0 +1,12 @@
+# 构建上下文排除项（减小镜像层与传输）
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+backend/web/dist
+*.db
+*.log
+/data
+/docs
+README.md

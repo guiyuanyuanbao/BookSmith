@@ -1,0 +1,167 @@
+/* BookSmith 全局样式 — 现代消费级应用视觉语言
+   设计基调：暖纸色背景 + 墨绿主色 + 圆角卡片 + 柔和阴影 + 衬线书卷标题 */
+
+:root {
+  /* 主色：墨绿（书籍/工坊意象） */
+  --bs-primary: #2f6f5e;
+  --bs-primary-light: #3d8a75;
+  --bs-primary-bg: #e8f3ef;
+  /* 背景：暖纸色 */
+  --bs-bg: #f7f5f0;
+  --bs-card: #ffffff;
+  /* 文字 */
+  --bs-text: #2c2a26;
+  --bs-text-sub: #8a8578;
+  /* 边框与阴影 */
+  --bs-border: #ece8df;
+  --bs-shadow: 0 1px 3px rgba(60, 55, 40, 0.06), 0 4px 16px rgba(60, 55, 40, 0.06);
+  --bs-shadow-hover: 0 4px 12px rgba(60, 55, 40, 0.1), 0 8px 28px rgba(60, 55, 40, 0.1);
+  /* 圆角 */
+  --bs-radius: 14px;
+  --bs-radius-sm: 10px;
+  /* 强调色 */
+  --bs-accent: #d97742;
+  --bs-danger: #d05656;
+  --bs-success: #4d9e6f;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  color: var(--bs-text);
+  background: var(--bs-bg);
+}
+
+/* 页面容器：居中限宽，呼吸感 */
+.page {
+  max-width: 1060px;
+  margin: 0 auto;
+  padding: 32px 28px 60px;
+}
+
+.page-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--bs-text);
+  margin: 0 0 6px;
+  /* 衬线书卷感 */
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+}
+
+.page-sub {
+  color: var(--bs-text-sub);
+  font-size: 14px;
+  margin: 0 0 24px;
+}
+
+/* 工具栏 */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.spacer { flex: 1; }
+.muted { color: var(--bs-text-sub); font-size: 12.5px; }
+
+/* 卡片：大圆角 + 悬浮阴影 */
+.book-card {
+  display: flex;
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--bs-border);
+  border-radius: var(--bs-radius);
+  background: var(--bs-card);
+  box-shadow: var(--bs-shadow);
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.book-card:hover {
+  box-shadow: var(--bs-shadow-hover);
+  transform: translateY(-2px);
+}
+
+/* 封面：圆角书封 + 底部书脊阴影 */
+.cover {
+  width: 84px;
+  height: 116px;
+  border-radius: 6px 12px 12px 6px;
+  background: linear-gradient(160deg, var(--bs-primary-light) 0%, var(--bs-primary) 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: inset -3px 0 6px rgba(0, 0, 0, 0.18), 2px 3px 8px rgba(60, 55, 40, 0.22);
+}
+.cover img { width: 100%; height: 100%; object-fit: cover; }
+
+.intro-text {
+  color: #6b6659;
+  font-size: 13.5px;
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Element Plus 主题变量覆写 */
+:root {
+  --el-color-primary: var(--bs-primary);
+  --el-color-primary-light-3: var(--bs-primary-light);
+  --el-color-primary-light-5: #7bb3a4;
+  --el-color-primary-light-7: #b5d6cb;
+  --el-color-primary-light-8: #cfe4dc;
+  --el-color-primary-light-9: var(--bs-primary-bg);
+  --el-color-primary-dark-2: #255748;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-font-family: 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --el-bg-color-page: var(--bs-bg);
+  --el-fill-color-lighter: #f4f1ea;
+}
+
+/* 表格轻量化 */
+.el-table {
+  --el-table-border-color: var(--bs-border);
+  --el-table-header-bg-color: #faf8f4;
+  --el-table-header-text-color: var(--bs-text-sub);
+  --el-table-row-hover-bg-color: #f6f9f7;
+}
+.el-table th.el-table__cell {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+/* 按钮圆角 */
+.el-button { border-radius: 9px; font-weight: 500; }
+.el-button--primary { box-shadow: 0 2px 6px rgba(47, 111, 94, 0.25); }
+.el-button--primary:hover { box-shadow: 0 3px 10px rgba(47, 111, 94, 0.35); }
+
+/* 输入框 */
+.el-input__wrapper, .el-textarea__inner {
+  border-radius: 9px;
+}
+.el-input--large .el-input__wrapper { border-radius: 12px; }
+
+/* 对话框 */
+.el-dialog {
+  border-radius: 18px;
+  box-shadow: 0 12px 48px rgba(60, 55, 40, 0.18);
+}
+.el-dialog__title { font-weight: 600; }
+
+/* 进度条 */
+.el-progress-bar__outer { border-radius: 8px; }
+.el-progress-bar__inner { border-radius: 8px; }
+
+/* 标签 */
+.el-tag { border-radius: 7px; font-weight: 500; }

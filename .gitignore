@@ -1,0 +1,7 @@
+.research/
+node_modules/
+backend/web/dist/
+*.exe
+data/
+*.db
+__pycache__/
