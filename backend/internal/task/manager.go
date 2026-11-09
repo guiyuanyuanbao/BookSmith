@@ -567,7 +567,13 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (st
 			return "", fmt.Errorf("%s 导出失败: %w", f, err)
 		}
 		name := util.SanitizeFileName(export.FileName(ctxData, exp.Ext()))
-		path := filepath.Join(m.outDir, name)
+		// 目录管理：downloads/{书名(作者)}/{文件名} —— 同书多源的文件聚在一个书目录下
+		bookDir := util.SanitizeFileName(book.Name + "(" + book.Author + ")")
+		dir := filepath.Join(m.outDir, bookDir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 			return "", err
 		}

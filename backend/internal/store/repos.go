@@ -863,6 +863,20 @@ func (s *Store) ListExports(limit int) ([]map[string]any, error) {
 	return out, rows.Err()
 }
 
+// GetExport 单条导出记录（含 path/name/format 等）。
+func (s *Store) GetExport(id int64) (map[string]any, error) {
+	row := s.db.QueryRow(`SELECT id,task_id,book_id,name,format,size,path,created_at FROM exports WHERE id=?`, id)
+	var id_, taskID, bookID, size, createdAt int64
+	var name, format, path string
+	if err := row.Scan(&id_, &taskID, &bookID, &name, &format, &size, &path, &createdAt); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id": id_, "taskId": taskID, "bookId": bookID, "name": name,
+		"format": format, "size": size, "path": path, "createdAt": createdAt,
+	}, nil
+}
+
 // DeleteExport 删除单条导出记录（并删除磁盘文件，由调用方处理）。
 func (s *Store) DeleteExport(id int64) (string, error) {
 	var path string

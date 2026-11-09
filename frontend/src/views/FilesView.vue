@@ -79,7 +79,7 @@ function downloadAll() {
   filtered.value.forEach((e, i) => {
     setTimeout(() => {
       const a = document.createElement('a')
-      a.href = api.fileUrl(e.name)
+      a.href = api.fileUrl(e)
       a.download = e.name
       document.body.appendChild(a)
       a.click()
@@ -123,7 +123,7 @@ const tasksStore = useTasksStore()
           <div class="file-name" :title="e.name">{{ e.name }}</div>
           <div class="muted file-meta">{{ fmtSize(e.size) }} · {{ fmtTime(e.createdAt) }}</div>
         </div>
-        <a :href="api.fileUrl(e.name)" target="_blank">
+        <a :href="api.fileUrl(e)" target="_blank">
           <el-button type="primary" size="small" plain>下载</el-button>
         </a>
         <el-button size="small" type="danger" plain @click="remove(e)">删除</el-button>

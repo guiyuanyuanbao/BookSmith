@@ -111,6 +111,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	// 导出文件
 	mux.HandleFunc("GET /api/exports", s.handleListExports)
 	mux.HandleFunc("DELETE /api/exports/{id}", s.handleDeleteExport)
+	mux.HandleFunc("GET /api/exports/{id}/file", s.handleExportFileDownload)
 	mux.HandleFunc("GET /api/files/{name}", s.handleDownloadFile)
 
 	// 搜索历史
@@ -528,6 +529,43 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func urlEscape(s string) string {
-	r := strings.NewReplacer("%", "%25", " ", "%20", `"`, "%22", "(", "%28", ")", "%29")
+	r := strings.NewReplacer("%", "%25", " ", "%20", `"`, "%28", "(", "%29", ")", "%29")
 	return r.Replace(s)
+}
+
+// handleExportFileDownload GET /api/exports/{id}/file —— 按导出记录下载文件。
+// 文件实际位于 downloads/{书名(作者)}/ 子目录，path 记录在 exports 表，无需前端拼子目录。
+func (s *Server) handleExportFileDownload(w http.ResponseWriter, r *http.Request) {
+	id := parseID(r.PathValue("id"))
+	if id <= 0 {
+		writeErr(w, 400, "id 非法")
+		return
+	}
+	rec, err := s.app.Store.GetExport(id)
+	if err != nil {
+		writeErr(w, 404, "导出记录不存在")
+		return
+	}
+	data, err := os.ReadFile(rec["path"].(string))
+	if err != nil {
+		writeErr(w, 404, "文件不存在（可能已被移动或删除）")
+		return
+	}
+	name := rec["name"].(string)
+	ct := "application/octet-stream"
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".txt":
+		ct = "text/plain; charset=utf-8"
+	case ".epub":
+		ct = "application/epub+zip"
+	case ".pdf":
+		ct = "application/pdf"
+	case ".html":
+		ct = "text/html; charset=utf-8"
+	case ".md":
+		ct = "text/markdown; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+urlEscape(name))
+	_, _ = w.Write(data)
 }

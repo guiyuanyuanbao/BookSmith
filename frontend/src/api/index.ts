@@ -437,5 +437,6 @@ export const api = {
   putSettings: (s: Record<string, string>) => apiPut<Record<string, string>>('/api/settings', s),
 
 
-  fileUrl: (name: string) => withKey(`/api/files/${encodeURIComponent(name)}`),
+  // 按导出记录下载（文件位于 downloads/{书名(作者)}/ 子目录，由后端按记录 path 定位）
+  fileUrl: (e: { id: number }) => withKey(`/api/exports/${e.id}/file`),
 }

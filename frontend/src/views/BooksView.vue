@@ -111,11 +111,11 @@ async function removeCover(g: BookGroup) {
   }
 }
 
-function downloadAll(list: { name: string }[]) {
+function downloadAll(list: { id: number; name: string }[]) {
   list.forEach((e, i) => {
     setTimeout(() => {
       const a = document.createElement('a')
-      a.href = api.fileUrl(e.name)
+      a.href = api.fileUrl(e)
       a.download = e.name
       document.body.appendChild(a)
       a.click()
@@ -748,7 +748,7 @@ onBeforeUnmount(() => {
               </el-tag>
               <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ e.name }}</span>
               <span class="muted" style="font-size: 12px">{{ e.size < 1048576 ? (e.size/1024).toFixed(1)+' KB' : (e.size/1048576).toFixed(2)+' MB' }}</span>
-              <a :href="api.fileUrl(e.name)" target="_blank"><el-button type="primary" size="small">下载</el-button></a>
+              <a :href="api.fileUrl(e)" target="_blank"><el-button type="primary" size="small">下载</el-button></a>
               <el-button size="small" type="danger" plain @click="deleteExport(e)">删除</el-button>
             </div>
             <div style="margin-top: 14px; display: flex; gap: 8px">
