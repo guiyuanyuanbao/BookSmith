@@ -113,3 +113,17 @@ func SniffImageMime(d []byte) string {
 	}
 	return "text/html"
 }
+
+// extFromMime mime → 文件扩展名。
+func extFromMime(m string) string {
+	m = strings.ToLower(m)
+	switch {
+	case strings.Contains(m, "png"):
+		return ".png"
+	case strings.Contains(m, "gif"):
+		return ".gif"
+	case strings.Contains(m, "webp"):
+		return ".webp"
+	}
+	return ".jpg"
+}

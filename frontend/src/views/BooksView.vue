@@ -277,7 +277,9 @@ async function continueSource(sb: SourceBook) {
 // 纯导出（按源）
 async function exportSource(sb: SourceBook) {
   try {
-    await api.exportNow(sb.id, ['txt', 'epub', 'pdf'])
+    // 用户未勾选任何格式时回退默认（设置页要求至少一项，此处为防御）
+    const formats = settings.defaultFormats.length ? [...settings.defaultFormats] : ['txt', 'epub']
+    await api.exportNow(sb.id, formats)
     ElMessage.success('已从缓存导出')
     await openExports(sb)
     await load()

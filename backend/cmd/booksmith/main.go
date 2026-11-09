@@ -76,6 +76,14 @@ func main() {
 	// 任务管理器
 	bus := task.NewEventBus()
 	taskMgr := task.New(st, svc, bus, filepath.Join(*dataDir, "downloads"))
+	// 封面缓存提供器（app 创建后装配，导出与代理共用磁盘缓存）
+	var coverProvider func(rawURL string) *export.CoverImage
+	taskMgr.CoverProvider = func(rawURL string) *export.CoverImage {
+		if coverProvider == nil {
+			return nil
+		}
+		return coverProvider(rawURL)
+	}
 	// 手动上传封面读取（导出用）：data/uploads/{id}.ext，Book.LocalCover 指向文件名
 	taskMgr.LocalCover = func(bookID int64) *export.CoverImage {
 		b, err := st.GetBook(bookID)
@@ -111,6 +119,21 @@ func main() {
 		CleanupJobs: map[string]*server.CleanupJob{},
 	}
 	app.StartCoverProxy()
+	coverProvider = func(rawURL string) *export.CoverImage {
+		if d, m, ok := app.CachedCoverImage(rawURL); ok {
+			ext := ".jpg"
+			switch {
+			case strings.Contains(m, "png"):
+				ext = ".png"
+			case strings.Contains(m, "gif"):
+				ext = ".gif"
+			case strings.Contains(m, "webp"):
+				ext = ".webp"
+			}
+			return &export.CoverImage{Data: d, MimeType: m, Ext: ext}
+		}
+		return nil
+	}
 
 	// 静态资源
 	staticHandler, err := web.Handler()

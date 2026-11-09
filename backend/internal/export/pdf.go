@@ -93,7 +93,11 @@ func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 	if ctx.Book.LocalCover != nil {
 		cover = ctx.Book.LocalCover
 	} else if ctx.Book.CoverURL != "" {
-		cover = DownloadCover(ctx.Book.CoverURL)
+		if ctx.CoverProvider != nil {
+			cover = ctx.CoverProvider(ctx.Book.CoverURL)
+		} else {
+			cover = DownloadCover(ctx.Book.CoverURL)
+		}
 	}
 	if cover != nil && useUnicode {
 		// 注册图片并绘制；fpdf 解码失败时回退文字封面

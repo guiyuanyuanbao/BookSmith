@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -230,6 +229,7 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "非法封面 URL")
 		return
 	}
+	// 第1层：内存热缓存（本进程高频访问）
 	coverMu.Lock()
 	if e, ok := s.app.CoverCache[rawURL]; ok {
 		coverMu.Unlock()
@@ -239,39 +239,28 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	coverMu.Unlock()
-
-	req, err := http.NewRequestWithContext(r.Context(), "GET", rawURL, nil)
-	if err != nil {
-		writeErr(w, 400, err.Error())
+	// 第2层：磁盘缓存（跨重启持久，解决远程站临时失败导致的"时有时无"）
+	if d, m, ok := coverCacheGet(s.app.DataDir, rawURL); ok {
+		coverMu.Lock()
+		if len(s.app.CoverCache) > 256 {
+			s.app.CoverCache = map[string]coverCacheEntry{}
+		}
+		s.app.CoverCache[rawURL] = coverCacheEntry{data: d, httpType: m}
+		coverMu.Unlock()
+		w.Header().Set("Content-Type", m)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(d)
 		return
 	}
-	// Referer 指向图片所在站点（绕过简单防盗链）
-	if u := parseURLHost(rawURL); u != "" {
-		req.Header.Set("Referer", u)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36")
-	resp, err := s.app.CoverClient.Do(req)
-	if err != nil {
-		writeErr(w, 502, "封面获取失败: "+err.Error())
+	// 第3层：远程抓取并写两级缓存
+	data, ct, ok := s.fetchAndCacheCover(rawURL)
+	if !ok {
+		writeErr(w, 502, "封面获取失败（源站暂时不可用，稍后重试或换源）")
 		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		writeErr(w, 502, fmt.Sprintf("封面获取失败: HTTP %d", resp.StatusCode))
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		writeErr(w, 502, "封面读取失败")
-		return
-	}
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" || ct == "application/octet-stream" {
-		ct = sniffImageType(data)
 	}
 	coverMu.Lock()
-	if len(s.app.CoverCache) > 128 {
-		s.app.CoverCache = map[string]coverCacheEntry{} // 简单防膨胀
+	if len(s.app.CoverCache) > 256 {
+		s.app.CoverCache = map[string]coverCacheEntry{}
 	}
 	s.app.CoverCache[rawURL] = coverCacheEntry{data: data, httpType: ct}
 	coverMu.Unlock()

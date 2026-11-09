@@ -60,6 +60,8 @@ type ExportContext struct {
 	Book     BookMeta
 	TXTGBK   bool   // TXT 导出 GBK 编码
 	FontPath string // PDF 字体（空则自动解析系统字体）
+	// CoverProvider 按 URL 取封面（磁盘缓存优先）。nil 时退化为 DownloadCover 直连。
+	CoverProvider func(rawURL string) *CoverImage
 }
 
 // Exporter 导出器接口。
