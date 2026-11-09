@@ -45,6 +45,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		if v == "" {
 			continue
 		}
+		if !validSetting(k, v) {
+			continue // 非法值拒绝写入，保持旧值生效
+		}
 		if err := s.app.Store.KVSet("setting_"+k, v); err != nil {
 			writeErr(w, 500, err.Error())
 			return
@@ -108,4 +111,42 @@ func (s *Server) handleAddSearchHistory(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleClearSearchHistory(w http.ResponseWriter, r *http.Request) {
 	_ = s.app.Store.KVSet("search_history", "[]")
 	writeOK(w, nil)
+}
+
+// validSetting 设置值合法性校验（防止非法值经 API 写入后污染前端运行时）。
+func validSetting(k, v string) bool {
+	switch k {
+	case "theme":
+		switch v {
+		case "green", "blue", "purple", "sepia", "dark":
+			return true
+		}
+		return false
+	case "bookView":
+		return v == "grid" || v == "list"
+	case "concurrency", "sourceConcurrency":
+		if v == "" {
+			return false
+		}
+		for _, c := range v {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		n := 0
+		for _, c := range v {
+			n = n*10 + int(c-'0')
+		}
+		return n >= 1 && n <= 64
+	case "defaultFormats":
+		for _, f := range strings.Split(v, ",") {
+			switch strings.TrimSpace(f) {
+			case "txt", "epub", "pdf", "html", "md":
+			default:
+				return false
+			}
+		}
+		return v != ""
+	}
+	return true
 }

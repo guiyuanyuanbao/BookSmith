@@ -97,6 +97,15 @@ async function save() {
     ElMessage.warning('名称与匹配内容必填')
     return
   }
+  // 正则合法性预检：用后端测试端点验证（非法正则在下载时才会爆炸，提前拦截）
+  if (r.isRegex) {
+    try {
+      await api.testReplace({ pattern: r.pattern, replacement: r.replacement || '', isRegex: true, text: '预检文本' })
+    } catch (e: any) {
+      ElMessage.error(`正则表达式无效：${e.message}`)
+      return
+    }
+  }
   try {
     await api.saveReplace(r)
     ElMessage.success('已保存')

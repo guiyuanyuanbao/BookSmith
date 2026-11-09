@@ -717,7 +717,7 @@ func (m *Manager) RetryFailed(id int64) error {
 		return fmt.Errorf("书源已不存在，无法重跑（可在书架移除后重新搜索）")
 	}
 	t.Status = model.TaskPending
-	t.Phase = "content"
+	t.Phase = "toc" // run 总是先重拉目录（可能已更新），从 toc 开始
 	t.ErrMsg = ""
 	_ = m.st.UpdateTask(t)
 	go m.run(t.ID, book, bs)

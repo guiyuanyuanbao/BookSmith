@@ -6,6 +6,7 @@ package server
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"encoding/hex"
 	"io"
 	"net/http"
@@ -46,7 +47,7 @@ func coverCacheGet(dataDir, rawURL string) ([]byte, string, bool) {
 func coverCachePut(dataDir, rawURL string, data []byte, mime string) {
 	os.MkdirAll(filepath.Join(dataDir, "covers"), 0o755)
 	p := coverCachePath(dataDir, rawURL)
-	tmp := p + ".tmp"
+	tmp := fmt.Sprintf("%s.%d.tmp", p, os.Getpid())
 	if err := os.WriteFile(tmp, append([]byte("mime:"+mime+"\n"), data...), 0o644); err != nil {
 		return
 	}

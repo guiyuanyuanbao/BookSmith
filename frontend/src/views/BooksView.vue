@@ -405,6 +405,11 @@ function coverSrc(g: BookGroup): string | null {
   return g.coverUrl ? coverProxy(g.coverUrl) : null
 }
 
+// 封面加载失败：隐藏 img（tile-cover 有固定宽高与背景，不塌陷）
+function onCoverErr(ev: Event) {
+  ;(ev.target as HTMLImageElement).style.visibility = 'hidden'
+}
+
 function progressOf(sb: SourceBook): number {
   const s = sb.stats
   if (!s || s.totalChapters === 0) return 0
@@ -523,7 +528,7 @@ onBeforeUnmount(() => {
             v-if="coverSrc(g)"
             :src="coverSrc(g) ?? undefined"
             loading="lazy"
-            @error="($event.target as HTMLImageElement).style.display = 'none'"
+            @error="onCoverErr"
           />
           <span v-else class="cover-ph" :style="{ background: phColor(g.primary.name) }">书</span>
           <el-checkbox
@@ -573,7 +578,7 @@ onBeforeUnmount(() => {
             v-if="coverSrc(g)"
             :src="coverSrc(g) ?? undefined"
             loading="lazy"
-            @error="($event.target as HTMLImageElement).style.display = 'none'"
+            @error="onCoverErr"
           />
           <span v-else class="cover-ph" :style="{ background: phColor(g.primary.name) }">书</span>
         </div>
@@ -679,7 +684,7 @@ onBeforeUnmount(() => {
         <template v-if="groupView === 'sources'">
           <!-- 封面管理：预览 + 上传 + 移除 -->
           <div class="drawer-cover">
-            <img v-if="coverSrc(groupDlgTarget)" :src="coverSrc(groupDlgTarget)!" class="drawer-cover-img" @error="($event.target as HTMLImageElement).style.display = 'none'" />
+            <img v-if="coverSrc(groupDlgTarget)" :src="coverSrc(groupDlgTarget)!" class="drawer-cover-img" @error="onCoverErr" />
             <span v-else class="drawer-cover-img cover-ph" :style="{ background: phColor(groupDlgTarget.primary.name) }">书</span>
             <div class="drawer-cover-ops">
               <div class="drawer-cover-name">
