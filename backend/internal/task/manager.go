@@ -88,7 +88,12 @@ var ErrNotFound = errors.New("任务不存在")
 
 // Create 创建下载任务：立即返回，后台异步执行 目录→正文→导出 流水线。
 // 详情拉取失败时回退使用搜索提供的书籍信息（legado 行为），不会让任务创建失败。
-func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSource, formats []string, rangeStart, rangeEnd, concurrency int) (int64, bool, error) {
+// CreateOptions 创建任务的可选项。
+type CreateOptions struct {
+	CandidateSources []model.CandidateSource // 自动换源候选（按优先级排序，不含主源）
+}
+
+func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSource, formats []string, rangeStart, rangeEnd, concurrency int, opts ...CreateOptions) (int64, bool, error) {
 	if len(formats) == 0 {
 		formats = []string{"txt", "epub"}
 	}
@@ -138,6 +143,9 @@ func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSour
 		RangeStart:  rangeStart,
 		RangeEnd:    rangeEnd,
 		Concurrency: concurrency,
+	}
+	if len(opts) > 0 && len(opts[0].CandidateSources) > 0 {
+		t.CandidateSources = opts[0].CandidateSources
 	}
 	taskID, err := m.st.CreateTask(t)
 	if err != nil {
@@ -189,12 +197,58 @@ func (m *Manager) run(taskID int64, book *model.Book, bs *model.BookSource) {
 
 	chapters, total, rangeEnd, tocErr := m.fetchToc(t, book, bs)
 	if tocErr != nil {
-		t.Status = model.TaskFailed
-		t.Phase = "toc"
-		t.ErrMsg = tocErr.Error()
-		_ = m.st.UpdateTask(t)
-		m.publish(t, "task.error", t.ErrMsg)
-		return
+		// 自动换源：目录失败时依次尝试候选源（快捷下载注入；显式选源不启用）
+		if len(t.CandidateSources) > 0 {
+			switched := false
+			for _, cand := range t.CandidateSources {
+				// 记录失败源
+				t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: bs.BookSourceName, Err: tocErr.Error()})
+				// 换下一个候选
+				candBs, serr := m.st.GetSource(cand.SourceURL)
+				if serr != nil {
+					t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: cand.SourceName, Err: "书源已不存在"})
+					continue
+				}
+				m.publish(t, "task.progress", fmt.Sprintf("目录获取失败，切换源：%s", cand.SourceName))
+				book.Origin = cand.SourceURL
+				book.OriginName = cand.SourceName
+				book.BookURL = cand.BookURL
+				chapters, total, rangeEnd, tocErr = m.fetchToc(t, book, candBs)
+				if tocErr == nil {
+					bs = candBs
+					t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: cand.SourceName, Err: ""})
+					switched = true
+					break
+				}
+			}
+			if !switched {
+				var hist strings.Builder
+				for _, ts := range t.TriedSources {
+					if ts.Err == "" {
+						continue
+					}
+					fmt.Fprintf(&hist, "%s(%s)；", ts.SourceName, ts.Err)
+				}
+				t.Status = model.TaskFailed
+				t.Phase = "toc"
+				t.ErrMsg = "目录获取失败，已尝试全部候选源：" + hist.String()
+				_ = m.st.UpdateTask(t)
+				m.publish(t, "task.error", t.ErrMsg)
+				return
+			}
+			t.Origin = book.Origin
+			t.OriginName = book.OriginName
+			t.ErrMsg = ""
+			_ = m.st.UpdateTask(t)
+			m.publish(t, "task.progress", "已切换至源："+t.OriginName)
+		} else {
+			t.Status = model.TaskFailed
+			t.Phase = "toc"
+			t.ErrMsg = tocErr.Error()
+			_ = m.st.UpdateTask(t)
+			m.publish(t, "task.error", t.ErrMsg)
+			return
+		}
 	}
 	if m.cancelRequested(taskID) {
 		t.Status = model.TaskCanceled

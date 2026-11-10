@@ -136,8 +136,24 @@ type DownloadTask struct {
 	ExportPath    string     `json:"exportPath,omitempty"` // 导出文件路径
 	ErrMsg        string     `json:"errMsg,omitempty"`
 	Phase         string     `json:"phase,omitempty"` // 执行阶段：toc / content / export
-	CreatedAt     int64      `json:"createdAt"`
-	UpdatedAt     int64      `json:"updatedAt"`
+	// 自动换源（目录失败时依次尝试候选源；仅搜索页快捷下载注入，显式选源下载不启用）
+	CandidateSources []CandidateSource `json:"candidateSources,omitempty"`
+	TriedSources     []TriedSource     `json:"triedSources,omitempty"`
+	CreatedAt        int64             `json:"createdAt"`
+	UpdatedAt        int64             `json:"updatedAt"`
+}
+
+// CandidateSource 自动换源候选。
+type CandidateSource struct {
+	SourceURL  string `json:"sourceUrl"`
+	SourceName string `json:"sourceName"`
+	BookURL    string `json:"bookUrl"`
+}
+
+// TriedSource 换源尝试记录。
+type TriedSource struct {
+	SourceName string `json:"sourceName"`
+	Err        string `json:"err"`
 }
 
 // TaskStatus 任务状态。

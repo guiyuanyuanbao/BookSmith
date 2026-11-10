@@ -71,6 +71,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 
 	// 封面代理（防盗链）
 	mux.HandleFunc("GET /api/cover", s.handleCover)
+	mux.HandleFunc("POST /api/probe-toc", s.handleProbeToc)
+	mux.HandleFunc("POST /api/probe-toc/batch", s.handleProbeTocBatch)
 
 	// 书源校验与调试
 	mux.HandleFunc("POST /api/sources/verify", s.handleVerifySources)
@@ -393,6 +395,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		CoverURL    string   `json:"coverUrl"`
 		Intro       string   `json:"intro"`
 		Formats     []string `json:"formats"`
+		// 自动换源候选（搜索页快捷下载注入；显式比源下载传空）
+		CandidateSources []model.CandidateSource `json:"candidateSources,omitempty"`
 		RangeStart  int      `json:"rangeStart"`
 		RangeEnd    int      `json:"rangeEnd"` // -1 到末尾
 		Concurrency int      `json:"concurrency"`
@@ -430,7 +434,11 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	taskID, existed, err := s.app.TaskMgr.Create(ctx, book, bs, req.Formats, req.RangeStart, req.RangeEnd, req.Concurrency)
+	var createOpts []task.CreateOptions
+	if len(req.CandidateSources) > 0 {
+		createOpts = []task.CreateOptions{{CandidateSources: req.CandidateSources}}
+	}
+	taskID, existed, err := s.app.TaskMgr.Create(ctx, book, bs, req.Formats, req.RangeStart, req.RangeEnd, req.Concurrency, createOpts...)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return

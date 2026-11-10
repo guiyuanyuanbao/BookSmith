@@ -113,6 +113,7 @@ export interface SearchOrigin {
   coverUrl?: string
   intro?: string
   wordCount?: string
+  respondTime?: number
 }
 
 export interface SearchResult {
@@ -209,6 +210,17 @@ export interface Chapter {
   content?: string
   contentLen?: number
   errMsg?: string
+}
+
+export interface TocProbeResult {
+  ok: boolean
+  err?: string
+  total: number
+  volumeCount?: number
+  firstChapters: string[]
+  lastChapters: string[]
+  probeMs: number
+  cached?: boolean
 }
 
 export interface DownloadTask {
@@ -403,7 +415,14 @@ export const api = {
     rangeStart?: number
     rangeEnd?: number
     concurrency?: number
+    // 自动换源候选（快捷下载注入；显式比源选定不传）
+    candidateSources?: { sourceUrl: string; sourceName: string; bookUrl: string }[]
   }) => apiPost<{ taskId: number; existing?: boolean }>('/api/tasks', body),
+  // 目录探针：单源质量预览（章节数/首末章）
+  probeToc: (sourceUrl: string, bookUrl: string) =>
+    apiPost<TocProbeResult>('/api/probe-toc', { sourceUrl, bookUrl }),
+  probeTocBatch: (sources: { sourceUrl: string; bookUrl: string }[]) =>
+    apiPost<{ sourceUrl: string; bookUrl: string; result: TocProbeResult }[]>('/api/probe-toc/batch', { sources }),
   listTasks: (limit = 50) => apiGet<DownloadTask[]>('/api/tasks', { limit }),
   taskFailures: (id: number) => apiGet<Chapter[]>(`/api/tasks/${id}/failures`),
   pauseTask: (id: number) => apiPost(`/api/tasks/${id}/pause`),

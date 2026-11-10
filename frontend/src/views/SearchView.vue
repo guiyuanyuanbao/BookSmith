@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, VideoPause, CircleCheckFilled } from '@element-plus/icons-vue'
-import { api, coverProxy, subscribeEvents, type SearchJobState, type SearchOrigin, type SearchResult } from '@/api'
+import { api, coverProxy, subscribeEvents, type SearchJobState, type SearchOrigin, type SearchResult, type TocProbeResult } from '@/api'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 
@@ -140,6 +140,65 @@ const pickItem = ref<SearchResult | null>(null)
 const excludeOrigin = ref<string | null>(null)
 // 换源对话框打开时记住任务名，提交后清理对应 switching 标记由 submitDownload 统一处理
 
+// ---------- 目录探测：比源对话框内按需探测源质量 ----------
+const probeMap = ref<Record<string, TocProbeResult>>({})
+const probing = ref(false)
+const probeTotal = ref(0)
+const probeDone = ref(0)
+
+async function onPickDialogOpen() {
+  probing.value = false
+  probeTotal.value = 0
+  probeDone.value = 0
+}
+
+// 探测源目录质量：按响应速度分批（每批 12 个，最多 3 批 36 个源）。
+// 若前一批全部失败（快源多为死源），自动继续探测下一批，直到探到健康源或达上限。
+async function startProbe() {
+  if (probing.value || !pickItem.value) return
+  const all = [...pickItem.value.origins].sort((a, b) => (a.respondTime || 9999) - (b.respondTime || 9999))
+  if (!all.length) return
+  probing.value = true
+  const BATCH = 6
+  const MAX_TOTAL = Math.min(36, all.length)
+  let cursor = 0
+  try {
+    while (cursor < MAX_TOTAL) {
+      const batch = all.slice(cursor, cursor + BATCH).map((o) => ({ sourceUrl: o.sourceUrl, bookUrl: o.bookUrl }))
+      probeTotal.value = Math.min(cursor + batch.length, MAX_TOTAL)
+      // 逐源请求（每源独立返回，失败不影响其他），保证 UI 持续更新
+      for (const src of batch) {
+        try {
+          const r = await api.probeToc(src.sourceUrl, src.bookUrl)
+          probeMap.value[src.sourceUrl] = r
+        } catch { /* 单源失败不阻塞 */ }
+        probeDone.value++
+      }
+      cursor += batch.length
+      const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
+      if (okCount >= 3) break
+    }
+  } catch (e: any) {
+    ElMessage.error('探测失败：' + e.message)
+  } finally {
+    probing.value = false
+  }
+}
+
+// 状态徽章：完结/连载/疑似缺章（与同书其他已探测源相对比较）
+function probeBadge(sourceUrl: string): { label: string; type: 'success' | 'warning' | 'info' } {
+  const res = probeMap.value[sourceUrl]
+  if (!res || !res.ok) return { label: '', type: 'info' }
+  // 与同书其他源对比：章节数 >= 最高已探测源的 90% 且有末章 → 完结倾向；显著偏少 → 疑似缺章
+  const totals = Object.values(probeMap.value).filter((r) => r.ok).map((r) => r.total)
+  const maxTotal = Math.max(...totals, 1)
+  const origin = pickItem.value?.origins.find((o) => o.sourceUrl === sourceUrl)
+  const kindText = (origin?.sourceName ? '' : '') + (pickItem.value?.origins.find((o) => o.sourceUrl === sourceUrl)?.latestChapter || '')
+  const lastMentioned = res.lastChapters.length > 0
+  if (res.total >= maxTotal * 0.9 && lastMentioned) return { label: '· 完整', type: 'success' }
+  if (res.total < maxTotal * 0.6) return { label: '· 疑似缺章', type: 'warning' }
+  return { label: '· 偏少', type: 'info' }
+}
 function openPick(item: SearchResult, excludeOriginUrl?: string) {
   pickItem.value = item
   excludeOrigin.value = excludeOriginUrl ?? null
@@ -184,6 +243,12 @@ async function submitDownload() {
   }
   dlSubmitting.value = true
   try {
+    // 自动换源候选：同书其他源按响应速度排序（排除当前选定源），目录失败时后端依次尝试
+    const candidates = [...(pickItem.value?.origins ?? [])]
+      .sort((a, b) => (a.respondTime || 9999) - (b.respondTime || 9999))
+      .filter((x) => x.sourceUrl !== o.sourceUrl)
+      .slice(0, 5)
+      .map((x) => ({ sourceUrl: x.sourceUrl, sourceName: x.sourceName, bookUrl: x.bookUrl }))
     const r = await api.createTask({
       bookName: dlName.value,
       author: dlAuthor.value,
@@ -195,6 +260,7 @@ async function submitDownload() {
       rangeStart: Math.max(0, dlRange.value[0] - 1),
       rangeEnd: dlRange.value[1] > 0 ? dlRange.value[1] - 1 : -1,
       concurrency: dlConcurrency.value,
+      candidateSources: candidates,
     })
     tasksStore.add(r.taskId, {
       name: dlName.value, done: 0, total: 0, status: 'running', author: dlAuthor.value,
@@ -503,10 +569,17 @@ onBeforeUnmount(() => {
     </template>
 
     <!-- 比源 + 下载（合并为一个对话框，先选源再设下载） -->
-    <el-dialog v-model="pickDlg" :title="`下载 · ${pickItem?.name ?? ''}`" width="860">
+    <el-dialog v-model="pickDlg" :title="`下载 · ${pickItem?.name ?? ''}`" width="860" @open="onPickDialogOpen">
       <div class="pick-section-title">
         ① 选择来源
         <span class="muted">（{{ pickItem?.origins.length }} 个来源，点击选中，默认按响应速度排序）</span>
+        <el-button
+          size="small" type="primary" plain style="margin-left: 12px"
+          :loading="probing" @click="startProbe"
+        >
+          {{ probing ? '探测中…' : '探测目录质量' }}
+        </el-button>
+        <span v-if="probing" class="muted" style="margin-left: 8px">{{ probeDone }}/{{ probeTotal }}</span>
       </div>
       <el-table
         :data="pickItem?.origins"
@@ -526,6 +599,17 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
         <el-table-column prop="sourceName" label="来源" min-width="150" show-overflow-tooltip />
+        <el-table-column label="章节数" width="110">
+          <template #default="{ row }">
+            <template v-if="probeMap[row.sourceUrl]">
+              <el-tag v-if="probeMap[row.sourceUrl].ok" size="small" :type="probeBadge(row.sourceUrl).type">
+                {{ probeMap[row.sourceUrl].total }} 章 {{ probeBadge(row.sourceUrl).label }}
+              </el-tag>
+              <el-tag v-else size="small" type="danger">目录不可用</el-tag>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="最新章节" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.latestChapter || '—' }}</template>
         </el-table-column>
@@ -535,12 +619,22 @@ onBeforeUnmount(() => {
         <el-table-column label="响应" width="80" sortable prop="respondTime">
           <template #default="{ row }">{{ fmtMs(row.respondTime) }}</template>
         </el-table-column>
-        <el-table-column label="简介" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="muted">{{ (row.intro || '—').slice(0, 40) }}</span>
-          </template>
-        </el-table-column>
       </el-table>
+
+      <!-- 目录预览面板（选中已探测的源时显示） -->
+      <div v-if="pickedOrigin && probeMap[pickedOrigin.sourceUrl]?.ok" class="toc-preview">
+        <div class="toc-preview-title">
+          目录预览 · {{ pickedOrigin.sourceName }}
+          <span class="muted" style="font-size: 12px; margin-left: 8px">
+            {{ probeMap[pickedOrigin.sourceUrl].total }} 章<template v-if="probeMap[pickedOrigin.sourceUrl].volumeCount"> · {{ probeMap[pickedOrigin.sourceUrl].volumeCount }} 卷</template>
+          </span>
+        </div>
+        <div class="toc-preview-body">
+          <div v-for="t in probeMap[pickedOrigin.sourceUrl].firstChapters" :key="t" class="toc-line">{{ t }}</div>
+          <div v-if="probeMap[pickedOrigin.sourceUrl].lastChapters.length" class="toc-ellipsis">⋯⋯</div>
+          <div v-for="t in probeMap[pickedOrigin.sourceUrl].lastChapters" :key="'l' + t" class="toc-line">{{ t }}</div>
+        </div>
+      </div>
 
       <div class="pick-section-title" style="margin-top: 18px">
         ② 下载设置
@@ -622,6 +716,25 @@ onBeforeUnmount(() => {
   align-items: center;
   min-height: 32px;
 }
+
+/* 目录预览面板 */
+.toc-preview {
+  margin-top: 12px;
+  background: var(--el-fill-color-light, #f4f1ea);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.toc-preview-title { font-size: 13px; font-weight: 600; color: var(--bs-text); margin-bottom: 6px; }
+.toc-preview-body { max-height: 140px; overflow-y: auto; }
+.toc-line {
+  font-size: 12.5px;
+  color: var(--bs-text-sub);
+  padding: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toc-ellipsis { color: var(--bs-text-sub); font-size: 12px; padding: 2px 0; text-align: center; }
 
 /* 搜索历史 chips：横向排在结果末尾 */
 .history-bar {
