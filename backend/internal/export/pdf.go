@@ -2,10 +2,12 @@ package export
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/go-pdf/fpdf"
@@ -62,22 +64,96 @@ func ResolveFontPath(configured string) string {
 	return ""
 }
 
-// extractTTCFirstFont 从 TTC（TrueType Collection）中提取第一个字体为独立 TTF 字节集。
-// fpdf 仅支持单字体文件；TTC 的每个 offset 指向一个完整的 sfnt 表集，可直接切片使用。
+// extractTTCFirstFont 从 TTC（TrueType Collection）中提取第一个字体为独立 sfnt 字体文件。
+//
+// 关键点：TTC 中每个字体的表目录里，offset/length 字段是相对**整个 TTC 文件**的绝对偏移。
+// 因此不能简单切片 data[fontOffset:]——那样所有表偏移都会错位 TTC 头大小（24 字节），
+// 导致 fpdf 解析 cmap/hhea 等表时读出垃圾偏移而 panic。
+// 正确做法：解析首字体的表目录，把每张表的数据按新文件的偏移重新布局，重建表目录。
 func extractTTCFirstFont(data []byte) ([]byte, error) {
 	if len(data) < 12 || string(data[:4]) != "ttcf" {
 		return nil, fmt.Errorf("非 TTC 文件")
 	}
-	numFonts := int(uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11]))
+	numFonts := int(binary.BigEndian.Uint32(data[8:12]))
 	if numFonts < 1 {
 		return nil, fmt.Errorf("TTC 无字体")
 	}
-	offset := int(uint32(data[12])<<24 | uint32(data[13])<<16 | uint32(data[14])<<8 | uint32(data[15]))
-	if offset <= 0 || offset >= len(data) {
+	fontOffset := int(binary.BigEndian.Uint32(data[12:16]))
+	if fontOffset <= 0 || fontOffset+12 > len(data) {
 		return nil, fmt.Errorf("TTC offset 非法")
 	}
-	// sfnt 表集长度 = 到文件尾（表数据连续），切出即可
-	return data[offset:], nil
+
+	// 解析首字体的 sfnt 表目录（记录中的 offset/length 相对整个 TTC 文件）
+	numTables := int(binary.BigEndian.Uint16(data[fontOffset+4 : fontOffset+6]))
+	if numTables == 0 || fontOffset+12+16*numTables > len(data) {
+		return nil, fmt.Errorf("TTC 表目录越界")
+	}
+	type tableRec struct {
+		tag      string
+		checksum []byte // 4 字节，数据不变则校验和仍有效
+		data     []byte
+	}
+	tables := make([]tableRec, 0, numTables)
+	for i := 0; i < numTables; i++ {
+		rec := data[fontOffset+12+16*i : fontOffset+12+16*(i+1)]
+		tag := string(rec[0:4])
+		off := int(binary.BigEndian.Uint32(rec[8:12]))
+		length := int(binary.BigEndian.Uint32(rec[12:16]))
+		if off < 0 || length < 0 || off+length > len(data) {
+			return nil, fmt.Errorf("表 %s 越界（off=%d len=%d）", tag, off, length)
+		}
+		tables = append(tables, tableRec{tag: tag, checksum: append([]byte(nil), rec[4:8]...), data: data[off : off+length]})
+	}
+	if len(tables) == 0 {
+		return nil, fmt.Errorf("TTC 无有效表")
+	}
+
+	// 重建独立字体文件：表目录按 tag 排序（sfnt 规范），数据 4 字节对齐顺序排列
+	sort.Slice(tables, func(a, b int) bool { return tables[a].tag < tables[b].tag })
+
+	dirSize := 16 + 16*len(tables) // sfnt 版本(4) + 头(12) = 16 字节总头，随后表目录
+	totalSize := dirSize
+	for _, t := range tables {
+		totalSize += len(t.data)
+		pad := (4 - len(t.data)%4) % 4
+		totalSize += pad
+	}
+	out := make([]byte, 0, totalSize)
+
+	// sfnt 头：版本取自该字体的目录（0x00010000 TrueType / 'OTTO' CFF）
+	out = append(out, data[fontOffset:fontOffset+4]...)
+	hdr := make([]byte, 12)
+	binary.BigEndian.PutUint16(hdr[0:2], uint16(len(tables)))
+	entrySelector := 0
+	for 1<<(entrySelector+1) <= len(tables) {
+		entrySelector++
+	}
+	searchRange := (1 << entrySelector) * 16
+	binary.BigEndian.PutUint16(hdr[2:4], uint16(searchRange))
+	binary.BigEndian.PutUint16(hdr[4:6], uint16(entrySelector))
+	binary.BigEndian.PutUint16(hdr[6:8], uint16(len(tables)*16-searchRange))
+	out = append(out, hdr...)
+
+	// 表目录：偏移改为相对新文件（rec 连续排列，pad 仅用于表数据对齐）
+	dataStart := dirSize
+	cursor := dataStart
+	for _, t := range tables {
+		rec := make([]byte, 16)
+		copy(rec[0:4], t.tag)
+		copy(rec[4:8], t.checksum)
+		binary.BigEndian.PutUint32(rec[8:12], uint32(cursor))
+		binary.BigEndian.PutUint32(rec[12:16], uint32(len(t.data)))
+		out = append(out, rec...)
+		pad := (4 - len(t.data)%4) % 4
+		cursor += len(t.data) + pad
+	}
+	// 表数据（按目录中记录的偏移顺序写出）
+	for _, t := range tables {
+		out = append(out, t.data...)
+		pad := (4 - len(t.data)%4) % 4
+		out = append(out, make([]byte, pad)...)
+	}
+	return out, nil
 }
 
 // fontBytes 解析字体文件为字节集（TTC 自动提取首字体，TTF/OTF 原样返回）。
