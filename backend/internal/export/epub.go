@@ -183,18 +183,7 @@ func (e *EPUBExporter) Export(ctx *ExportContext, w io.Writer) error {
 		chapterCount++
 		fmt.Fprintf(&opf, "    <item id=\"ch%d\" href=\"chapters/ch%04d.xhtml\" media-type=\"application/xhtml+xml\"/>\n", ch.Number, ch.Number)
 	}
-	opf.WriteString("  </manifest>\n")
-
-	// spine
-	opf.WriteString("  <spine toc=\"ncx\">\n")
-	opf.WriteString("    <itemref idref=\"cover\"/>\n")
-	for _, ch := range ctx.Book.Chapters {
-		if ch.IsVolume {
-			continue
-		}
-		fmt.Fprintf(&opf, "    <itemref idref=\"ch%d\"/>\n", ch.Number)
-	}
-	// spine 尾与 package 关闭延后到章节/图片写出之后（见函数尾）
+	// manifest 关闭与 spine 延后到图片 items 追加之后（见函数尾）
 
 	// style.css
 	css := `body { font-family: serif; line-height: 1.6; margin: 1em; }
@@ -347,7 +336,16 @@ p { text-indent: 2em; margin: 0.4em 0; }
 		}
 		opf.WriteString(items.String())
 	}
+	// manifest 关闭（图片 items 之后）→ spine → package
 	opf.WriteString("  </manifest>\n")
+	opf.WriteString("  <spine toc=\"ncx\">\n")
+	opf.WriteString("    <itemref idref=\"cover\"/>\n")
+	for _, ch := range ctx.Book.Chapters {
+		if ch.IsVolume {
+			continue
+		}
+		fmt.Fprintf(&opf, "    <itemref idref=\"ch%d\"/>\n", ch.Number)
+	}
 	opf.WriteString("  </spine>\n")
 	opf.WriteString("</package>\n")
 	if err := writeFile("OEBPS/content.opf", opf.String()); err != nil {
