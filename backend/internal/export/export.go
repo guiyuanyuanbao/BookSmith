@@ -62,6 +62,8 @@ type ExportContext struct {
 	FontPath string // PDF 字体（空则自动解析系统字体）
 	// CoverProvider 按 URL 取封面（磁盘缓存优先）。nil 时退化为 DownloadCover 直连。
 	CoverProvider func(rawURL string) *CoverImage
+	// ImageProvider 按 URL 取正文插图（磁盘缓存优先）。nil 时 EPUB 内不嵌正文图片。
+	ImageProvider func(rawURL string) (data []byte, mime string, ok bool)
 }
 
 // Exporter 导出器接口。

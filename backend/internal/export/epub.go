@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -27,13 +28,55 @@ func xmlEscape(s string) string { return xmlEscaper.Replace(s) }
 
 var htmlTagStripRe = regexp.MustCompile(`<[^>]*>`)
 
+// contentImgRe 正文中的插图引用：原始 <img src="...">、HTML 转义形态（&lt;img src=&quot;...&quot;&gt;）
+// 以及裸 URL 行（.jpg/.png/.webp/.gif 结尾）。SF 等源的图片以转义标签混在正文里。
+var contentImgRe = regexp.MustCompile(`(?i)(?:&lt;|<)img[^>]*(?:&quot;|"|')(https?://[^&"'<>\s]+\.(?:jpg|jpeg|png|webp|gif))(?:&quot;|"|')[^>]*(?:&gt;|>)|(?m)^\s*(https?://[^\s"<>]+\.(?:jpg|jpeg|png|webp|gif))\s*$`)
+
+
+// epubImage 单张嵌入插图。
+type epubImage struct {
+	URL  string
+	Name string // OEBPS/images/ 内文件名
+	Mime string
+	Data []byte
+}
+
 // xhtmlEscapeBody 将正文纯文本转为 XHTML 段落。
 func textToXHTML(content string) string {
+	return textToXHTMLWithImages(content, nil, 0, nil)
+}
+
+// textToXHTMLWithImages 将正文转 XHTML 段落；转义/原始 <img> 与裸图片 URL 行
+// 会被下载（fetcher）并替换为 <div class="illust"><img/></div>；下载失败回退原文本。
+// images 收集成功嵌入的图片（供 manifest 与磁盘写出），bookNum 用于命名防冲突。
+func textToXHTMLWithImages(content string, fetcher func(string) ([]byte, string, bool), bookNum int, images *[]epubImage) string {
 	var sb strings.Builder
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
+		}
+		// 尝试识别图片引用
+		if fetcher != nil && images != nil {
+			if m := contentImgRe.FindStringSubmatch(line); m != nil {
+				url := m[1]
+				if url == "" {
+					url = m[2]
+				}
+				if url != "" {
+					if data, mime, ok := fetcher(url); ok {
+						img := epubImage{
+							URL:  url,
+							Name: fmt.Sprintf("ch%04d-%d%s", bookNum, len(*images)+1, extFromMime(mime)),
+							Mime: mime,
+							Data: data,
+						}
+						*images = append(*images, img)
+						fmt.Fprintf(&sb, "<div class=\"illust\"><img src=\"../images/%s\"/></div>\n", xmlEscape(img.Name))
+						continue
+					}
+				}
+			}
 		}
 		sb.WriteString("<p>")
 		sb.WriteString(xmlEscape(line))
@@ -84,6 +127,15 @@ func (e *EPUBExporter) Export(ctx *ExportContext, w io.Writer) error {
 			return err
 		}
 		_, err = io.WriteString(f, data)
+		return err
+	}
+	// writeBytes 二进制内容写出（图片用）。
+	writeBytes := func(name string, data []byte) error {
+		f, err := zw.Create(name)
+		if err != nil {
+			return err
+		}
+		_, err = f.Write(data)
 		return err
 	}
 
@@ -142,11 +194,7 @@ func (e *EPUBExporter) Export(ctx *ExportContext, w io.Writer) error {
 		}
 		fmt.Fprintf(&opf, "    <itemref idref=\"ch%d\"/>\n", ch.Number)
 	}
-	opf.WriteString("  </spine>\n")
-	opf.WriteString("</package>\n")
-	if err := writeFile("OEBPS/content.opf", opf.String()); err != nil {
-		return err
-	}
+	// spine 尾与 package 关闭延后到章节/图片写出之后（见函数尾）
 
 	// style.css
 	css := `body { font-family: serif; line-height: 1.6; margin: 1em; }
@@ -263,7 +311,8 @@ p { text-indent: 2em; margin: 0.4em 0; }
 		return err
 	}
 
-	// 章节 XHTML
+	// 章节 XHTML（正文插图下载嵌入）
+	var embedded []epubImage
 	for _, ch := range ctx.Book.Chapters {
 		if ch.IsVolume {
 			continue
@@ -279,11 +328,30 @@ p { text-indent: 2em; margin: 0.4em 0; }
 			fmt.Fprintf(&sb, "  <h2>%s</h2>\n", xmlEscape(ch.Volume))
 		}
 		fmt.Fprintf(&sb, "  <h1>%s</h1>\n", xmlEscape(ch.Title))
-		sb.WriteString(textToXHTML(ch.Content))
+		sb.WriteString(textToXHTMLWithImages(ch.Content, ctx.ImageProvider, ch.Number, &embedded))
 		sb.WriteString("</body>\n</html>\n")
 		if err := writeFile(name, sb.String()); err != nil {
 			return err
 		}
+	}
+	// 嵌入图片写出 + manifest 追加（图片条目需在 </manifest> 之前）
+	if len(embedded) > 0 {
+		var items strings.Builder
+		for _, img := range embedded {
+			base := strings.TrimSuffix(img.Name, filepath.Ext(img.Name))
+			fmt.Fprintf(&items, "    <item id=\"img-%s\" href=\"images/%s\" media-type=\"%s\"/>\n",
+				base, xmlEscape(img.Name), img.Mime)
+			if err := writeBytes("OEBPS/images/"+img.Name, img.Data); err != nil {
+				return err
+			}
+		}
+		opf.WriteString(items.String())
+	}
+	opf.WriteString("  </manifest>\n")
+	opf.WriteString("  </spine>\n")
+	opf.WriteString("</package>\n")
+	if err := writeFile("OEBPS/content.opf", opf.String()); err != nil {
+		return err
 	}
 	return nil
 }

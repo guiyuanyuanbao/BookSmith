@@ -532,6 +532,16 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (st
 	}
 	// 封面缓存提供器（磁盘缓存优先，解决远程站临时失败导致导出无封面）
 	ctxData.CoverProvider = m.CoverProvider
+	// 正文插图提供器（与封面共用磁盘缓存链路）
+	ctxData.ImageProvider = func(rawURL string) ([]byte, string, bool) {
+		if m.CoverProvider == nil {
+			return nil, "", false
+		}
+		if ci := m.CoverProvider(rawURL); ci != nil {
+			return ci.Data, ci.MimeType, true
+		}
+		return nil, "", false
+	}
 	chapterList := make([]export.ChapterMeta, 0, len(allChapters))
 	curVolume := ""
 	num := 0
