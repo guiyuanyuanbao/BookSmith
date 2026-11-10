@@ -47,7 +47,8 @@ func ResolveFontPath(configured string) string {
 		}
 	default: // linux 等
 		candidates = []string{
-			"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+			"/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",        // alpine font-wqy-zenhei
+			"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",       // debian fonts-wqy-zenhei
 			"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 			"/usr/share/fonts/truetype/arphic/uming.ttc",
 			"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -59,6 +60,40 @@ func ResolveFontPath(configured string) string {
 		}
 	}
 	return ""
+}
+
+// extractTTCFirstFont 从 TTC（TrueType Collection）中提取第一个字体为独立 TTF 字节集。
+// fpdf 仅支持单字体文件；TTC 的每个 offset 指向一个完整的 sfnt 表集，可直接切片使用。
+func extractTTCFirstFont(data []byte) ([]byte, error) {
+	if len(data) < 12 || string(data[:4]) != "ttcf" {
+		return nil, fmt.Errorf("非 TTC 文件")
+	}
+	numFonts := int(uint32(data[8])<<24 | uint32(data[9])<<16 | uint32(data[10])<<8 | uint32(data[11]))
+	if numFonts < 1 {
+		return nil, fmt.Errorf("TTC 无字体")
+	}
+	offset := int(uint32(data[12])<<24 | uint32(data[13])<<16 | uint32(data[14])<<8 | uint32(data[15]))
+	if offset <= 0 || offset >= len(data) {
+		return nil, fmt.Errorf("TTC offset 非法")
+	}
+	// sfnt 表集长度 = 到文件尾（表数据连续），切出即可
+	return data[offset:], nil
+}
+
+// fontBytes 解析字体文件为字节集（TTC 自动提取首字体，TTF/OTF 原样返回）。
+func fontBytes(path string) ([]byte, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) >= 4 && string(data[:4]) == "ttcf" {
+		sub, err := extractTTCFirstFont(data)
+		if err != nil {
+			return nil, false, err
+		}
+		return sub, true, nil
+	}
+	return data, false, nil
 }
 
 // Export 实现 Exporter。
@@ -73,13 +108,15 @@ func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 	pdf.SetCreator("BookSmith", true)
 
 	useUnicode := false
-	if fontPath != "" && !strings.EqualFold(fontExt(fontPath), ".ttc") {
-		// fpdf 仅支持 TTF/OTF 单字体文件（TTC 不可用，字体解析阶段已跳过）
-		pdf.AddUTF8Font("cjk", "", fontPath)
-		if pdf.Err() {
-			return fmt.Errorf("加载字体 %s: %v", fontPath, pdf.Error())
+	if fontPath != "" {
+		fontData, _, ferr := fontBytes(fontPath) // TTC 自动提取首字体
+		if ferr == nil && len(fontData) > 0 {
+			pdf.AddUTF8FontFromBytes("cjk", "", fontData)
+			if pdf.Err() {
+				return fmt.Errorf("加载字体 %s: %v", fontPath, pdf.Err())
+			}
+			useUnicode = true
 		}
-		useUnicode = true
 	}
 	font := "cjk"
 	if !useUnicode {

@@ -22,8 +22,9 @@ COPY --from=frontend /app/backend/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /booksmith ./cmd/booksmith/
 
 # ---------- 阶段 3：运行镜像 ----------
+# font-wqy-zenhei：中文 PDF 导出所需 CJK 字体（TTC，导出器自动提取）
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && \
+RUN apk add --no-cache ca-certificates tzdata font-wqy-zenhei && \
     addgroup -S booksmith && adduser -S booksmith -G booksmith
 WORKDIR /app
 COPY --from=backend /booksmith /app/booksmith
