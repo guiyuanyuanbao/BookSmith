@@ -98,6 +98,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/books/{id}/cover", s.handleCoverUpload)
 	mux.HandleFunc("GET /api/books/{id}/cover", s.handleCoverGet)
 	mux.HandleFunc("DELETE /api/books/{id}/cover", s.handleCoverDelete)
+	mux.HandleFunc("POST /api/books/{id}/cover/fetch", s.handleCoverFetch) // 从书源搜索获取封面
 	mux.HandleFunc("GET /api/books/{id}/toc", s.handleBookToc)
 	mux.HandleFunc("GET /api/books/{id}/chapters/{index}", s.handleChapter)
 
@@ -345,6 +346,8 @@ func (s *Server) handleGetBook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteBook(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	// 封面兜底：若同书剩余来源都不足以提供封面，先把封面转存为本地封面再删
+	s.preserveGroupCovers([]int64{id})
 	if err := s.app.Store.DeleteBook(id); err != nil {
 		writeErr(w, 500, err.Error())
 		return

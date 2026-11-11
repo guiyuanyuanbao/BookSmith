@@ -394,6 +394,9 @@ export const api = {
     return http.post(`/api/books/${id}/cover`, fd, { headers: { 'Content-Type': 'multipart/form-data' } }) as Promise<ApiResult<{ localCover: string; url: string }>>
   },
   removeCover: (id: number) => apiDelete(`/api/books/${id}/cover`),
+  // 从书源搜索获取封面（遍历启用书源，首个有效封面转存为本地封面）
+  fetchCoverFromSources: (id: number) =>
+    apiPost<{ localCover: string; coverUrl: string; fromSource: string }>(`/api/books/${id}/cover/fetch`, {}),
   bookDownload: (id: number, body: { formats: string[]; rangeStart?: number; rangeEnd?: number; concurrency?: number }) =>
     apiPost<{ taskId: number; existing: boolean }>(`/api/books/${id}/download`, body),
   exportNow: (id: number, formats: string[]) =>

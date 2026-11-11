@@ -111,6 +111,24 @@ async function removeCover(g: BookGroup) {
   }
 }
 
+// 从书源获取封面：遍历启用书源搜索该书，首个有效封面转存为本地封面
+const coverFetching = ref(false)
+
+async function fetchCoverFromSources(g: BookGroup) {
+  if (coverFetching.value) return
+  coverFetching.value = true
+  try {
+    const r = await api.fetchCoverFromSources(g.primary.id)
+    ElMessage.success(`已从「${r.fromSource}」获取封面并保存`)
+    await load(true)
+    syncDrawerTarget()
+  } catch (e: any) {
+    ElMessage.error(e.message || '获取失败')
+  } finally {
+    coverFetching.value = false
+  }
+}
+
 function downloadAll(list: { id: number; name: string }[]) {
   list.forEach((e, i) => {
     setTimeout(() => {
@@ -690,10 +708,15 @@ onBeforeUnmount(() => {
               <div class="drawer-cover-name">
                 {{ groupDlgTarget.primary.localCover ? '已使用手动上传的封面' : '使用书源远程封面' }}
               </div>
-              <div style="display: flex; gap: 8px">
+              <div style="display: flex; gap: 8px; flex-wrap: wrap">
                 <el-button size="small" type="primary" plain :loading="coverUploading" @click="coverFileInput?.click()">
                   {{ groupDlgTarget.primary.localCover ? '更换封面' : '上传封面' }}
                 </el-button>
+                <el-button
+                  size="small" plain :loading="coverFetching"
+                  :title="groupDlgTarget.primary.localCover ? '从书源搜索并替换为网络封面' : '从所有书源中搜索该书并获取封面'"
+                  @click="fetchCoverFromSources(groupDlgTarget)"
+                >从书源获取</el-button>
                 <el-button v-if="groupDlgTarget.primary.localCover" size="small" plain @click="removeCover(groupDlgTarget)">恢复远程</el-button>
               </div>
               <input
