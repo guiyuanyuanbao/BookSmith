@@ -152,21 +152,37 @@ async function onPickDialogOpen() {
   probeDone.value = 0
 }
 
-// 探测源目录质量：按响应速度分批（每批 12 个，最多 3 批 36 个源）。
-// 若前一批全部失败（快源多为死源），自动继续探测下一批，直到探到健康源或达上限。
-async function startProbe() {
+// 探测源目录质量：按响应速度分批（每批 probeBatchSize 个）。
+// 首次自动探测：健康源达标即停（或达最多源数上限）；之后可手动「继续探测」不受阈值限制，探完剩余源。
+// probeCursor 记录已探测到的源位置（跨多次触发连续推进）
+const probeCursor = ref(0)
+// probeAborted：用户点「停止」后置位，探测循环尽快退出
+let probeAborted = false
+
+// startProbe(manual)：manual=false 为首次自动探测（健康即停）；
+// manual=true 为手动续探（用户对已探结果不满意，继续探完剩余源，不受阈值限制）
+async function startProbe(manual = false) {
   if (probing.value || !pickItem.value) return
   const all = [...pickItem.value.origins].sort((a, b) => (a.respondTime || 9999) - (b.respondTime || 9999))
   if (!all.length) return
-  probing.value = true
   const BATCH = Math.max(1, settings.probeBatchSize)
+  // 自动模式的探测上限（手动续探不受限，探完剩余全部）
   const MAX_TOTAL = Math.min(Math.max(1, settings.probeMaxSources), all.length)
   const STOP_HEALTHY = Math.max(1, settings.probeStopHealthy)
-  let cursor = 0
+  // 自动模式：从头开始，达到健康阈值即停；手动续探：从上次位置继续，直到全部探完
+  let cursor = manual ? probeCursor.value : 0
+  if (cursor >= all.length) {
+    ElMessage.info('所有来源都已探测过')
+    return
+  }
+  probing.value = true
+  probeAborted = false
   try {
-    while (cursor < MAX_TOTAL) {
+    let processed = 0
+    let healthyStop = false
+    while (cursor < all.length) {
       const batch = all.slice(cursor, cursor + BATCH).map((o) => ({ sourceUrl: o.sourceUrl, bookUrl: o.bookUrl }))
-      probeTotal.value = Math.min(cursor + batch.length, MAX_TOTAL)
+      probeTotal.value = Math.min(cursor + batch.length, all.length)
       // 逐源请求（每源独立返回，失败不影响其他），保证 UI 持续更新
       for (const src of batch) {
         try {
@@ -174,16 +190,41 @@ async function startProbe() {
           probeMap.value[src.sourceUrl] = r
         } catch { /* 单源失败不阻塞 */ }
         probeDone.value++
+        processed++
+        cursor++
+        // 用户点停止：立即结束（不处理本批剩余）
+        if (probeAborted) break
+        // 自动模式：健康数达标即停（手动模式不受阈值限制，探到全部或用户停止）
+        if (!manual) {
+          const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
+          if (okCount >= STOP_HEALTHY) { healthyStop = true; break }
+        }
       }
-      cursor += batch.length
-      const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
-      if (okCount >= STOP_HEALTHY) break
+      if (healthyStop) break
+      // 自动模式在批间也响应上限与健康阈值；手动模式探完即止
+      if (probeAborted || cursor >= all.length) break
+      if (!manual) {
+        const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
+        if (okCount >= STOP_HEALTHY) { healthyStop = true; break }
+        if (cursor >= MAX_TOTAL) break // 达到最多探测源数上限
+      }
+    }
+    probeCursor.value = cursor
+    if (probeAborted) {
+      ElMessage.info(`已停止探测（已探 ${probeDone.value} 个，可点「继续探测」接着探）`)
+    } else if (manual) {
+      ElMessage.success(`已继续探测 ${processed} 个来源（共探完 ${cursor}/${all.length}）`)
     }
   } catch (e: any) {
     ElMessage.error('探测失败：' + e.message)
   } finally {
     probing.value = false
+    probeAborted = false
   }
+}
+
+function stopProbe() {
+  if (probing.value) probeAborted = true
 }
 
 // 状态徽章：完结/连载/疑似缺章（与同书其他已探测源相对比较）
@@ -203,6 +244,11 @@ function probeBadge(sourceUrl: string): { label: string; type: 'success' | 'warn
 function openPick(item: SearchResult, excludeOriginUrl?: string) {
   pickItem.value = item
   excludeOrigin.value = excludeOriginUrl ?? null
+  // 换书重置探测状态（不同书的探测结果互不通用）
+  probeMap.value = {}
+  probeDone.value = 0
+  probeTotal.value = 0
+  probeCursor.value = 0
   // 换源场景预选第一个可用源，省一次点击
   pickDlg.value = true
   const first = item.origins.find((o) => o.sourceUrl !== excludeOriginUrl)
@@ -575,12 +621,26 @@ onBeforeUnmount(() => {
         ① 选择来源
         <span class="muted">（{{ pickItem?.origins.length }} 个来源，点击选中，默认按响应速度排序）</span>
         <el-button
+          v-if="probeDone === 0"
           size="small" type="primary" plain style="margin-left: 12px"
-          :loading="probing" @click="startProbe"
+          :loading="probing" @click="startProbe(false)"
         >
           {{ probing ? '探测中…' : '探测目录质量' }}
         </el-button>
-        <span v-if="probing" class="muted" style="margin-left: 8px">{{ probeDone }}/{{ probeTotal }}</span>
+        <el-button
+          v-else-if="probeCursor < (pickItem?.origins.length ?? 0)"
+          size="small" type="primary" plain style="margin-left: 12px"
+          :loading="probing" @click="startProbe(true)"
+        >
+          {{ probing ? '探测中…' : '继续探测' }}
+        </el-button>
+        <el-button
+          v-if="probing"
+          size="small" style="margin-left: 4px" @click="stopProbe"
+        >停止</el-button>
+        <span v-if="probing || probeDone > 0" class="muted" style="margin-left: 8px">
+          {{ probing ? `已探 ${probeDone}/${probeTotal}` : `已探 ${probeDone} 个` }}
+        </span>
       </div>
       <el-table
         :data="pickItem?.origins"

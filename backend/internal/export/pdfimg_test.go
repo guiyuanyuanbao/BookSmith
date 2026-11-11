@@ -1,6 +1,9 @@
 package export
 
 import (
+	"bytes"
+	"image"
+	"image/png"
 	"strings"
 	"testing"
 
@@ -10,6 +13,12 @@ import (
 func TestPDFImageEmbed(t *testing.T) {
 	content := "　　中文渲染测试段落。\n&lt;img src=&quot;http://rs.sfacg.com/web/novel/images/uploadpic/2020/02/c9c066b3-2b8e-45c5-a72b-775ae94179ec.jpg&quot;&gt;\n图片后正文。"
 	var called int
+	// 生成真实可解析的 1x1 PNG（fpdf 会完整解码，假数据会被拒）
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal("生成 PNG 失败: " + err.Error())
+	}
+	validPNG := pngBuf.Bytes()
 	ctx := &ExportContext{
 		Book: BookMeta{
 			Name: "测试书", Author: "作者",
@@ -17,9 +26,7 @@ func TestPDFImageEmbed(t *testing.T) {
 		},
 		ImageProvider: func(rawURL string) ([]byte, string, bool) {
 			called++
-			// 1x1 白色 PNG
-			png := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
-			return png, "image/png", true
+			return validPNG, "image/png", true
 		},
 	}
 	pdf := fpdf.New("P", "mm", "A4", "")
