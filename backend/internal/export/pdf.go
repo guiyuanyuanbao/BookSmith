@@ -2,6 +2,10 @@ package export
 
 import (
 	"bytes"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -176,20 +180,20 @@ func fontBytes(path string) ([]byte, bool, error) {
 func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 	fontPath := ResolveFontPath(ctx.FontPath)
 
-	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.SetMargins(20, 18, 20)
-	pdf.SetAutoPageBreak(true, 18)
-	pdf.SetTitle(ctx.Book.Name, true)
-	pdf.SetAuthor(ctx.Book.Author, true)
-	pdf.SetCreator("BookSmith", true)
+	doc := fpdf.New("P", "mm", "A4", "")
+	doc.SetMargins(20, 18, 20)
+	doc.SetAutoPageBreak(true, 18)
+	doc.SetTitle(ctx.Book.Name, true)
+	doc.SetAuthor(ctx.Book.Author, true)
+	doc.SetCreator("BookSmith", true)
 
 	useUnicode := false
 	if fontPath != "" {
 		fontData, _, ferr := fontBytes(fontPath) // TTC 自动提取首字体
 		if ferr == nil && len(fontData) > 0 {
-			pdf.AddUTF8FontFromBytes("cjk", "", fontData)
-			if pdf.Err() {
-				return fmt.Errorf("加载字体 %s: %v", fontPath, pdf.Err())
+			doc.AddUTF8FontFromBytes("cjk", "", fontData)
+			if doc.Err() {
+				return fmt.Errorf("加载字体 %s: %v", fontPath, doc.Err())
 			}
 			useUnicode = true
 		}
@@ -201,7 +205,7 @@ func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 	}
 
 	// 封面页：优先绘制真实封面图，失败退化为文字封面（手动上传优先于远程下载）
-	pdf.AddPage()
+	doc.AddPage()
 	var cover *CoverImage
 	if ctx.Book.LocalCover != nil {
 		cover = ctx.Book.LocalCover
@@ -215,10 +219,10 @@ func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 	if cover != nil && useUnicode {
 		// 注册图片并绘制；fpdf 解码失败时回退文字封面
 		imgName := "cover" + cover.Ext
-		pdf.RegisterImageOptionsReader(imgName, fpdf.ImageOptions{ImageType: strings.TrimPrefix(cover.Ext, ".")}, bytes.NewReader(cover.Data))
-		if !pdf.Err() {
+		doc.RegisterImageOptionsReader(imgName, fpdf.ImageOptions{ImageType: strings.TrimPrefix(cover.Ext, ".")}, bytes.NewReader(cover.Data))
+		if !doc.Err() {
 			// A4: 210×297mm，图片居中等比缩放（宽至 150mm，高按比例）
-			info := pdf.GetImageInfo(imgName)
+			info := doc.GetImageInfo(imgName)
 			imgW, imgH := 150.0, 0.0
 			if info != nil && info.Width() > 0 {
 				imgH = imgW * info.Height() / info.Width()
@@ -229,91 +233,138 @@ func (e *PDFExporter) Export(ctx *ExportContext, w io.Writer) error {
 			}
 			x := (210 - imgW) / 2
 			y := (297 - imgH) / 2
-			pdf.Image(imgName, x, y, imgW, imgH, false, "", 0, "")
+			doc.Image(imgName, x, y, imgW, imgH, false, "", 0, "")
 		} else {
-			pdf.ClearError()
+			doc.ClearError()
 			// 图片解码失败：文字封面
-			pdf.SetFont(font, "", 26)
-			pdf.SetY(90)
-			pdf.CellFormat(0, 14, ctx.Book.Name, "", 1, "C", false, 0, "")
-			pdf.SetFont(font, "", 14)
-			pdf.Ln(6)
-			pdf.CellFormat(0, 10, ctx.Book.Author, "", 1, "C", false, 0, "")
+			doc.SetFont(font, "", 26)
+			doc.SetY(90)
+			doc.CellFormat(0, 14, ctx.Book.Name, "", 1, "C", false, 0, "")
+			doc.SetFont(font, "", 14)
+			doc.Ln(6)
+			doc.CellFormat(0, 10, ctx.Book.Author, "", 1, "C", false, 0, "")
 		}
 	} else {
-		pdf.SetFont(font, "", 26)
-		pdf.SetY(90)
-		pdf.CellFormat(0, 14, ctx.Book.Name, "", 1, "C", false, 0, "")
-		pdf.SetFont(font, "", 14)
-		pdf.Ln(6)
-		pdf.CellFormat(0, 10, ctx.Book.Author, "", 1, "C", false, 0, "")
+		doc.SetFont(font, "", 26)
+		doc.SetY(90)
+		doc.CellFormat(0, 14, ctx.Book.Name, "", 1, "C", false, 0, "")
+		doc.SetFont(font, "", 14)
+		doc.Ln(6)
+		doc.CellFormat(0, 10, ctx.Book.Author, "", 1, "C", false, 0, "")
 		intro := strings.TrimSpace(htmlTagStripRe.ReplaceAllString(ctx.Book.Intro, ""))
 		if intro != "" && useUnicode {
 			if r := []rune(intro); len(r) > 120 {
 				intro = string(r[:120]) + "…"
 			}
-			pdf.SetY(130)
-			pdf.SetFont(font, "", 10)
-			pdf.MultiCell(0, 6, intro, "", "C", false)
+			doc.SetY(130)
+			doc.SetFont(font, "", 10)
+			doc.MultiCell(0, 6, intro, "", "C", false)
 		}
 	}
 
 	// 页眉页脚
-	pdf.SetHeaderFuncMode(func() {
-		if pdf.PageNo() <= 1 {
+	doc.SetHeaderFuncMode(func() {
+		if doc.PageNo() <= 1 {
 			return
 		}
-		pdf.SetFont(font, "", 8)
-		pdf.SetTextColor(128, 128, 128)
-		pdf.CellFormat(0, 6, ctx.Book.Name, "", 0, "C", false, 0, "")
-		pdf.Ln(-1)
-		pdf.SetTextColor(0, 0, 0)
+		doc.SetFont(font, "", 8)
+		doc.SetTextColor(128, 128, 128)
+		doc.CellFormat(0, 6, ctx.Book.Name, "", 0, "C", false, 0, "")
+		doc.Ln(-1)
+		doc.SetTextColor(0, 0, 0)
 	}, false)
-	pdf.SetFooterFunc(func() {
-		pdf.SetY(-14)
-		pdf.SetFont(font, "", 8)
-		pdf.SetTextColor(128, 128, 128)
-		pdf.CellFormat(0, 8, fmt.Sprintf("- %d -", pdf.PageNo()), "", 0, "C", false, 0, "")
-		pdf.SetTextColor(0, 0, 0)
+	doc.SetFooterFunc(func() {
+		doc.SetY(-14)
+		doc.SetFont(font, "", 8)
+		doc.SetTextColor(128, 128, 128)
+		doc.CellFormat(0, 8, fmt.Sprintf("- %d -", doc.PageNo()), "", 0, "C", false, 0, "")
+		doc.SetTextColor(0, 0, 0)
 	})
 
 	// 章节
-	pdf.SetTextColor(0, 0, 0)
+	doc.SetTextColor(0, 0, 0)
 	for _, ch := range ctx.Book.Chapters {
 		if ch.IsVolume {
 			// 卷名：新页居中
-			pdf.AddPage()
-			pdf.SetFont(font, "", 18)
-			pdf.SetY(120)
-			pdf.CellFormat(0, 12, ch.Title, "", 1, "C", false, 0, "")
+			doc.AddPage()
+			doc.SetFont(font, "", 18)
+			doc.SetY(120)
+			doc.CellFormat(0, 12, ch.Title, "", 1, "C", false, 0, "")
 			continue
 		}
-		pdf.AddPage()
-		pdf.SetFont(font, "", 15)
-		pdf.CellFormat(0, 10, ch.Title, "", 1, "C", false, 0, "")
-		pdf.Ln(3)
+		doc.AddPage()
+		doc.SetFont(font, "", 15)
+		doc.CellFormat(0, 10, ch.Title, "", 1, "C", false, 0, "")
+		doc.Ln(3)
 		if ch.Volume != "" {
-			pdf.SetFont(font, "", 10)
-			pdf.SetTextColor(110, 110, 110)
-			pdf.CellFormat(0, 6, ch.Volume, "", 1, "C", false, 0, "")
-			pdf.SetTextColor(0, 0, 0)
-			pdf.Ln(2)
+			doc.SetFont(font, "", 10)
+			doc.SetTextColor(110, 110, 110)
+			doc.CellFormat(0, 6, ch.Volume, "", 1, "C", false, 0, "")
+			doc.SetTextColor(0, 0, 0)
+			doc.Ln(2)
 		}
-		pdf.SetFont(font, "", 11)
+		doc.SetFont(font, "", 11)
+		imgSeq := 0
 		for _, line := range strings.Split(ch.Content, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
+			// 插图行（转义/原始 <img> 或裸图片 URL）：下载嵌入，失败回退文本
+			if ctx.ImageProvider != nil && contentImgRe.MatchString(line) {
+				if m := contentImgRe.FindStringSubmatch(line); m != nil {
+					url := m[1]
+					if url == "" {
+						url = m[2]
+					}
+					if url != "" {
+						if data, mime, ok := ctx.ImageProvider(url); ok && strings.HasPrefix(mime, "image/") {
+							ext := extFromMime(mime)
+							imgSeq++
+							name := fmt.Sprintf("img-%d-%d", ch.Number, imgSeq)
+							tp := fpdf.ImageOptions{
+								ImageType: strings.TrimPrefix(ext, "."),
+							}
+							_ = doc.RegisterImageOptionsReader(name, tp, bytes.NewReader(data))
+							if !doc.Err() {
+								// 图片按页面可用宽度等比缩放（尺寸用 image.DecodeConfig 取）
+								cfg, _, derr := image.DecodeConfig(bytes.NewReader(data))
+								w, h := float64(cfg.Width), float64(cfg.Height)
+								if derr != nil || w <= 0 || h <= 0 {
+									w, h = 600, 800
+								}
+								pageW, _ := doc.GetPageSize()
+								_, _, _, margin := doc.GetMargins()
+								drawW := pageW - margin*2
+								drawH := drawW * h / w
+								if drawH > drawW*1.4 { // 超高图片限制高度，避免一图占满整页
+									drawH = drawW * 1.4
+									drawW = drawH * w / h
+								}
+								x, y := doc.GetXY()
+								_, pageH := doc.GetPageSize()
+								if y+drawH > pageH-18 { // 剩余空间不足则换页
+									doc.AddPage()
+									x, y = doc.GetXY()
+								}
+								doc.Image(name, x, y, drawW, drawH, false, "", 0, "")
+								doc.Ln(drawH + 4)
+								continue
+							}
+							doc.ClearError() // 图片注册失败回退为文本行
+						}
+					}
+				}
+			}
 			// 首行缩进两个全角空格
 			if useUnicode {
-				pdf.MultiCell(0, 6.2, "　　"+line, "", "", false)
+				doc.MultiCell(0, 6.2, "　　"+line, "", "", false)
 			} else {
-				pdf.MultiCell(0, 6.2, line, "", "", false)
+				doc.MultiCell(0, 6.2, line, "", "", false)
 			}
 		}
 	}
-	return pdf.Output(w)
+	return doc.Output(w)
 }
 
 func fontExt(path string) string {

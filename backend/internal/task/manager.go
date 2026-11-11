@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -562,7 +563,15 @@ func (m *Manager) removeOldExports(bookID int64) {
 }
 
 // doExport 按格式导出（章节缓存复用）。
-func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (string, error) {
+func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (result string, err error) {
+	// panic 兜底：任何意外（字体解析、图片解码、内存）都不让任务静默卡在 exporting。
+	// panic 转为 error 返回给调用方（同步 ExportNow 路径标 failed；异步 run 路径由 run 的 recover 记录）
+	defer func() {
+		if r := recover(); r != nil {
+			result = ""
+			err = fmt.Errorf("导出内部异常: %v\n%s", r, debug.Stack())
+		}
+	}()
 	allChapters, err := m.st.ListChapters(book.ID, true)
 	if err != nil {
 		return "", err
