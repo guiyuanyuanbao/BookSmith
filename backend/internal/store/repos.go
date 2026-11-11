@@ -1,15 +1,16 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"booksmith/internal/model"
 	"booksmith/internal/util"
-	"database/sql"
-	"errors"
-	"fmt"
-	"strings"
 )
 
 // ErrNotFound 未找到。
@@ -995,11 +996,29 @@ func (s *Store) SweepGhostExports() (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	// 孤儿记录对应的磁盘文件一并清理
+	// 孤儿记录对应的磁盘文件一并清理；随之变空的源子目录与书目录也清理
+	srcDirs := map[string]bool{}
+	bookDirs := map[string]bool{}
 	for _, p := range delFiles {
 		_ = os.Remove(p)
+		// p = {outDir}/{书名(作者)}/{源名}/{书名(作者)}.ext
+		srcDirs[filepath.Dir(p)] = true
+		bookDirs[filepath.Dir(filepath.Dir(p))] = true
 	}
+	removeEmptyDirs(srcDirs)
+	removeEmptyDirs(bookDirs)
 	return len(del), nil
+}
+
+// removeEmptyDirs 删除空目录（仅当目录内无任何条目时；不存在或不空则保留）。
+func removeEmptyDirs(dirs map[string]bool) {
+	for dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			continue
+		}
+		_ = os.Remove(dir)
+	}
 }
 
 // ListExportsByBook 按书过滤导出记录。

@@ -63,12 +63,16 @@ func (s *Server) handleBookBatch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "ids 不能为空")
 		return
 	}
+	coverURLs := s.bookCoverURLs(req.IDs)
 	s.preserveGroupCovers(req.IDs)
 	n, err := s.app.Store.BatchRemoveBooks(req.IDs)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	// 磁盘回收：导出文件 + 无引用的封面缓存（即时清理，不等下次启动 Sweep）
+	s.removeBookExports(req.IDs)
+	s.evictCovers(coverURLs)
 	writeOK(w, map[string]any{"affected": n})
 }
 

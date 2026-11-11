@@ -35,8 +35,11 @@ type App struct {
 	SearchMu    sync.Mutex
 	CleanupJobs map[string]*CleanupJob
 	CleanupMu   sync.Mutex
-	CoverCache  map[string]coverCacheEntry
 	CoverClient *http.Client
+	// 封面 LRU：mem 为内存热缓存（256 条），disk 为磁盘 covers 目录索引
+	// （上限 5000 个文件/500MB，超限驱逐最冷文件，防止缓存无限增长）
+	CoverMemLRU  *CoverLRU
+	CoverDiskLRU *CoverLRU
 }
 
 // FindEnabledSources 启用书源列表（webbook.Search 输入）。
@@ -346,13 +349,29 @@ func (s *Server) handleGetBook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteBook(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	// 删除前收集封面 URL（删除后无法再查）；导出文件也需在记录消失前取路径
+	coverURLs := s.bookCoverURLs([]int64{id})
 	// 封面兜底：若同书剩余来源都不足以提供封面，先把封面转存为本地封面再删
 	s.preserveGroupCovers([]int64{id})
 	if err := s.app.Store.DeleteBook(id); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
+	// 磁盘回收：导出文件 + 无引用的封面缓存（即时清理，不等下次启动 Sweep）
+	s.removeBookExports([]int64{id})
+	s.evictCovers(coverURLs)
 	writeOK(w, nil)
+}
+
+// bookCoverURLs 批量取书籍记录的 CoverURL（删除前收集用）。
+func (s *Server) bookCoverURLs(ids []int64) []string {
+	urls := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if b, err := s.app.Store.GetBook(id); err == nil && b.CoverURL != "" {
+			urls = append(urls, b.CoverURL)
+		}
+	}
+	return urls
 }
 
 func (s *Server) handleBookToc(w http.ResponseWriter, r *http.Request) {

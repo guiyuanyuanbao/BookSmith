@@ -14,11 +14,15 @@ import (
 	"path/filepath"
 	"strings"
 )
-
 // coverCachePath URL → 磁盘缓存文件路径。
 func coverCachePath(dataDir, rawURL string) string {
 	sum := sha256.Sum256([]byte(rawURL))
 	return filepath.Join(dataDir, "covers", hex.EncodeToString(sum[:])[:32]+".img")
+}
+
+// coverCacheFileKey URL → 磁盘缓存文件名（LRU 索引键）。
+func coverCacheFileKey(dataDir, rawURL string) string {
+	return filepath.Base(coverCachePath(dataDir, rawURL))
 }
 
 // coverCacheGet 读磁盘缓存；命中返回 (data, mime, true)。
@@ -85,17 +89,17 @@ func (s *Server) fetchAndCacheCover(rawURL string) ([]byte, string, bool) {
 		return nil, "", false
 	}
 	coverCachePut(s.app.DataDir, rawURL, data, ct)
+	s.app.coverCacheStore(rawURL, data, ct)
 	return data, ct, true
 }
 
-// CachedCoverImage 对外提供：导出层获取封面（磁盘缓存优先，未命中远程抓取并缓存）。
+// CachedCoverImage 对外提供：导出层获取封面（内存/磁盘 LRU 优先，未命中远程抓取并缓存）。
 // 由 main 装配到 taskMgr.CoverProvider。
-// CachedCoverImage 对外提供（App 级，供 main 装配）。
 func (a *App) CachedCoverImage(rawURL string) ([]byte, string, bool) {
 	if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
 		return nil, "", false
 	}
-	if d, m, ok := coverCacheGet(a.DataDir, rawURL); ok {
+	if d, m, ok := a.coverCacheLookup(rawURL); ok {
 		return d, m, true
 	}
 	// 远程抓取并写缓存（复用代理同款客户端与逻辑）
@@ -127,5 +131,35 @@ func (a *App) CachedCoverImage(rawURL string) ([]byte, string, bool) {
 		return nil, "", false
 	}
 	coverCachePut(a.DataDir, rawURL, data, ct)
+	a.coverCacheStore(rawURL, data, ct)
 	return data, ct, true
+}
+
+// evictCovers 按封面 URL 回收磁盘缓存文件（删除书籍时调用）。
+// 仅删除无其他书籍引用的 URL；LRU 索引与内存热缓存同步反注册。
+func (s *Server) evictCovers(urls []string) {
+	if len(urls) == 0 {
+		return
+	}
+	// 全库仍在使用的封面 URL 集合
+	inUse := map[string]bool{}
+	if all, _, err := s.app.Store.ListBooks("", 10000, 0); err == nil {
+		for _, b := range all {
+			if b.CoverURL != "" {
+				inUse[b.CoverURL] = true
+			}
+		}
+	}
+	// 当前被删书籍已不在库里（或即将删除），逐 URL 判断
+	for _, u := range urls {
+		if u == "" || inUse[u] {
+			continue
+		}
+		if s.app.CoverDiskLRU != nil {
+			key := coverCacheFileKey(s.app.DataDir, u)
+			_ = os.Remove(filepath.Join(s.app.DataDir, "covers", key))
+			s.app.CoverDiskLRU.Remove(key)
+		}
+		s.app.CoverMemLRU.Remove(u)
+	}
 }

@@ -319,7 +319,7 @@ async function exportSource(sb: SourceBook) {
 async function removeGroup(g: BookGroup) {
   try {
     await ElMessageBox.confirm(
-      `移除《${g.primary.name}》全部 ${g.sources.length} 个来源？\n章节缓存与下载记录将一并删除。`,
+      `移除《${g.primary.name}》全部 ${g.sources.length} 个来源？\n章节缓存、导出文件与下载记录将一并删除。`,
       '确认移除', { type: 'warning', confirmButtonText: '移除' },
     )
   } catch { return }
@@ -335,7 +335,7 @@ async function removeGroup(g: BookGroup) {
 
 async function removeSource(sb: SourceBook) {
   try {
-    await ElMessageBox.confirm(`移除来源「${sb.originName || sb.origin}」及其缓存？`, '确认', { type: 'warning' })
+    await ElMessageBox.confirm(`移除来源「${sb.originName || sb.origin}」及其章节缓存？（导出文件保留在导出页）`, '确认', { type: 'warning' })
   } catch { return }
   try {
     await api.batchBooks('remove', [sb.id])

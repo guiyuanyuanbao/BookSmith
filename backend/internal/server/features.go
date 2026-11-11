@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -207,17 +209,46 @@ type coverCacheEntry struct {
 }
 
 // StartCoverProxy 初始化封面代理缓存与客户端。
+// 内存热缓存 256 条 LRU；磁盘 covers 目录建索引（5000 个/500MB 上限，超限驱逐最冷文件）。
 func (s *App) StartCoverProxy() {
-	s.CoverCache = map[string]coverCacheEntry{}
 	s.CoverClient = &http.Client{
 		Timeout: 8 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{},
 		},
 	}
+	coversDir := filepath.Join(s.DataDir, "covers")
+	diskLRU := NewCoverLRU(coverMaxEntries, coverMaxBytes, func(key string) {
+		_ = os.Remove(filepath.Join(coversDir, key)) // 驱逐即删文件
+	})
+	scanCoversDir(coversDir, diskLRU)
+	s.CoverDiskLRU = diskLRU
+	s.CoverMemLRU = NewCoverLRU(memCoverMax, 0, nil) // 内存层仅条目数上限
 }
 
-var coverMu sync.Mutex
+// coverCacheLookup 三层读取：内存 LRU → 磁盘（+LRU 索引提温）→ 未命中。
+func (s *App) coverCacheLookup(rawURL string) ([]byte, string, bool) {
+	if e, ok := s.CoverMemLRU.memGet(rawURL); ok {
+		return e.data, e.httpType, true
+	}
+	if d, m, ok := coverCacheGet(s.DataDir, rawURL); ok {
+		if s.CoverDiskLRU != nil {
+			s.CoverDiskLRU.Touch(coverCacheFileKey(s.DataDir, rawURL), int64(len(d)))
+		}
+		s.CoverMemLRU.memPut(rawURL, coverCacheEntry{data: d, httpType: m})
+		return d, m, true
+	}
+	return nil, "", false
+}
+
+// coverCacheStore 两级写入：磁盘文件 + LRU 索引 + 内存热缓存。
+func (s *App) coverCacheStore(rawURL string, data []byte, mime string) {
+	coverCachePut(s.DataDir, rawURL, data, mime)
+	if s.CoverDiskLRU != nil {
+		s.CoverDiskLRU.Touch(coverCacheFileKey(s.DataDir, rawURL), int64(len(data)))
+	}
+	s.CoverMemLRU.memPut(rawURL, coverCacheEntry{data: data, httpType: mime})
+}
 
 func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 	rawURL := r.URL.Query().Get("url")
@@ -229,24 +260,8 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "非法封面 URL")
 		return
 	}
-	// 第1层：内存热缓存（本进程高频访问）
-	coverMu.Lock()
-	if e, ok := s.app.CoverCache[rawURL]; ok {
-		coverMu.Unlock()
-		w.Header().Set("Content-Type", e.httpType)
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		_, _ = w.Write(e.data)
-		return
-	}
-	coverMu.Unlock()
-	// 第2层：磁盘缓存（跨重启持久，解决远程站临时失败导致的"时有时无"）
-	if d, m, ok := coverCacheGet(s.app.DataDir, rawURL); ok {
-		coverMu.Lock()
-		if len(s.app.CoverCache) > 256 {
-			s.app.CoverCache = map[string]coverCacheEntry{}
-		}
-		s.app.CoverCache[rawURL] = coverCacheEntry{data: d, httpType: m}
-		coverMu.Unlock()
+	// 第1+2层：内存 LRU → 磁盘 LRU（跨重启持久，解决远程站临时失败导致的"时有无"）
+	if d, m, ok := s.app.coverCacheLookup(rawURL); ok {
 		w.Header().Set("Content-Type", m)
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(d)
@@ -258,12 +273,6 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 502, "封面获取失败（源站暂时不可用，稍后重试或换源）")
 		return
 	}
-	coverMu.Lock()
-	if len(s.app.CoverCache) > 256 {
-		s.app.CoverCache = map[string]coverCacheEntry{}
-	}
-	s.app.CoverCache[rawURL] = coverCacheEntry{data: data, httpType: ct}
-	coverMu.Unlock()
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(data)
