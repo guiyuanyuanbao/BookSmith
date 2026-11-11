@@ -111,7 +111,7 @@ func extractTTCFirstFont(data []byte) ([]byte, error) {
 	// 重建独立字体文件：表目录按 tag 排序（sfnt 规范），数据 4 字节对齐顺序排列
 	sort.Slice(tables, func(a, b int) bool { return tables[a].tag < tables[b].tag })
 
-	dirSize := 16 + 16*len(tables) // sfnt 版本(4) + 头(12) = 16 字节总头，随后表目录
+	dirSize := 12 + 16*len(tables) // sfnt 规范头：版本(4) + numTables(2) + searchRange(2) + entrySelector(2) + rangeShift(2) = 12 字节，随后表目录
 	totalSize := dirSize
 	for _, t := range tables {
 		totalSize += len(t.data)
@@ -120,9 +120,9 @@ func extractTTCFirstFont(data []byte) ([]byte, error) {
 	}
 	out := make([]byte, 0, totalSize)
 
-	// sfnt 头：版本取自该字体的目录（0x00010000 TrueType / 'OTTO' CFF）
+	// sfnt 头：版本取自该字体的目录（0x00010000 TrueType / 'OTTO' CFF），其余字段紧随其后的 8 字节
 	out = append(out, data[fontOffset:fontOffset+4]...)
-	hdr := make([]byte, 12)
+	hdr := make([]byte, 8)
 	binary.BigEndian.PutUint16(hdr[0:2], uint16(len(tables)))
 	entrySelector := 0
 	for 1<<(entrySelector+1) <= len(tables) {

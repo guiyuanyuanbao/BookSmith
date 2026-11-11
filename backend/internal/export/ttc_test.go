@@ -1,9 +1,12 @@
 package export
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"testing"
+
+	"github.com/go-pdf/fpdf"
 )
 
 // TestExtractTTCFirstFont_RealTTC 用本机真实 TTC 验证提取产物的表目录自洽
@@ -50,7 +53,7 @@ func TestExtractTTCFirstFont_RealTTC(t *testing.T) {
 		t.Fatalf("表目录非法: numTables=%d size=%d", numTables, len(out))
 	}
 	for i := 0; i < numTables; i++ {
-		rec := out[16+16*i : 16+16*(i+1)]
+		rec := out[12+16*i : 12+16*(i+1)]
 		off := int(binary.BigEndian.Uint32(rec[8:12]))
 		length := int(binary.BigEndian.Uint32(rec[12:16]))
 		if off < 12+16*numTables || off+length > len(out) {
@@ -60,7 +63,7 @@ func TestExtractTTCFirstFont_RealTTC(t *testing.T) {
 	// 关键验收：cmap 表存在且长度合理（此前 panic 正是 cmap 解析越界）
 	hasCmap := false
 	for i := 0; i < numTables; i++ {
-		rec := out[16+16*i : 16+16*(i+1)]
+		rec := out[12+16*i : 12+16*(i+1)]
 		if string(rec[0:4]) == "cmap" {
 			hasCmap = true
 			off := int(binary.BigEndian.Uint32(rec[8:12]))
@@ -73,4 +76,49 @@ func TestExtractTTCFirstFont_RealTTC(t *testing.T) {
 	if !hasCmap {
 		t.Error("缺少 cmap 表")
 	}
+}
+
+// TestExtractTTCFirstFont_FpdfParses 以消费端为准：提取产物必须能被 fpdf 正常解析
+// （此前 bug 的教训——自洽性测试按实现读取，测试通过但消费端必炸）
+func TestExtractTTCFirstFont_FpdfParses(t *testing.T) {
+	candidates := []string{
+		`C:\Windows\Fonts\msyh.ttc`,
+		"/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
+	}
+	var data []byte
+	var path string
+	for _, c := range candidates {
+		d, err := os.ReadFile(c)
+		if err == nil && len(d) >= 4 && string(d[:4]) == "ttcf" {
+			data = d
+			path = c
+			break
+		}
+	}
+	if data == nil {
+		t.Skip("无 TTC 字体文件")
+	}
+	out, err := extractTTCFirstFont(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.AddUTF8FontFromBytes("cjk", "", out)
+	if pdf.Err() {
+		t.Fatalf("fpdf 解析提取产物失败: %v", pdf.Error())
+	}
+	pdf.AddPage()
+	pdf.SetFont("cjk", "", 16)
+	pdf.Text(20, 30, "中文渲染验证：来自深渊的我今天也要拯救人类")
+	if pdf.Err() {
+		t.Fatalf("中文文本写入失败: %v", pdf.Error())
+	}
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		t.Fatalf("PDF 输出失败: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("PDF 输出为空")
+	}
+	t.Logf("fpdf 解析并渲染成功: %s -> %d 字节 PDF", path, buf.Len())
 }
