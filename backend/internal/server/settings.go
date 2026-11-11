@@ -14,6 +14,10 @@ var defaultSettings = map[string]string{
 	"defaultFormats":    "txt,epub",
 	"bookView":          "grid", // grid / list
 	"sourceConcurrency": "48",
+	// 目录探测参数（比源对话框"探测目录质量"）
+	"probeBatchSize":   "12", // 每批探测源数
+	"probeMaxSources":  "36", // 单次探测最多源数
+	"probeStopHealthy": "3",  // 探到几个健康源即停
 }
 
 // handleGetSettings 读取全部设置。
@@ -147,6 +151,23 @@ func validSetting(k, v string) bool {
 			}
 		}
 		return v != ""
+	case "probeBatchSize", "probeMaxSources", "probeStopHealthy":
+		if v == "" {
+			return false
+		}
+		n := 0
+		for _, c := range v {
+			if c < '0' || c > '9' {
+				return false
+			}
+			n = n*10 + int(c-'0')
+		}
+		switch k {
+		case "probeBatchSize", "probeStopHealthy":
+			return n >= 1 && n <= 20
+		default: // probeMaxSources
+			return n >= 1 && n <= 100
+		}
 	}
 	return true
 }

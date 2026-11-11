@@ -20,6 +20,10 @@ interface SettingsState {
   concurrency: number
   defaultFormats: string[]
   bookView: 'grid' | 'list'
+  // 目录探测参数（比源对话框）
+  probeBatchSize: number
+  probeMaxSources: number
+  probeStopHealthy: number
 }
 
 const defaults: SettingsState = {
@@ -27,6 +31,9 @@ const defaults: SettingsState = {
   concurrency: 6,
   defaultFormats: ['txt', 'epub'],
   bookView: 'grid',
+  probeBatchSize: 6,
+  probeMaxSources: 36,
+  probeStopHealthy: 3,
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -37,6 +44,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const concurrency = computed(() => state.value.concurrency)
   const defaultFormats = computed(() => state.value.defaultFormats)
   const bookView = computed(() => state.value.bookView)
+  const probeBatchSize = computed(() => state.value.probeBatchSize)
+  const probeMaxSources = computed(() => state.value.probeMaxSources)
+  const probeStopHealthy = computed(() => state.value.probeStopHealthy)
   const isDark = computed(() => state.value.theme === 'dark')
 
   /** 应用主题到 CSS 变量（全局生效，含暗色） */
@@ -99,6 +109,9 @@ export const useSettingsStore = defineStore('settings', () => {
         concurrency: parseInt(s.concurrency) || defaults.concurrency,
         defaultFormats: (s.defaultFormats || 'txt,epub').split(',').filter(Boolean),
         bookView: (s.bookView as 'grid' | 'list') || defaults.bookView,
+        probeBatchSize: parseInt(s.probeBatchSize) || defaults.probeBatchSize,
+        probeMaxSources: parseInt(s.probeMaxSources) || defaults.probeMaxSources,
+        probeStopHealthy: parseInt(s.probeStopHealthy) || defaults.probeStopHealthy,
       }
       applyTheme(state.value.theme)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state.value))
@@ -121,5 +134,5 @@ export const useSettingsStore = defineStore('settings', () => {
     })
   }
 
-  return { state, loaded, theme, concurrency, defaultFormats, bookView, isDark, load, save, applyTheme }
+  return { state, loaded, theme, concurrency, defaultFormats, bookView, isDark, probeBatchSize, probeMaxSources, probeStopHealthy, load, save, applyTheme }
 })

@@ -21,6 +21,13 @@ func TestValidSetting(t *testing.T) {
 		{"theme", "dark", true},
 		{"defaultFormats", "exe,bat", false},
 		{"defaultFormats", "txt,epub", true},
+		{"probeBatchSize", "12", true},
+		{"probeBatchSize", "0", false},
+		{"probeBatchSize", "21", false},
+		{"probeMaxSources", "36", true},
+		{"probeMaxSources", "101", false},
+		{"probeStopHealthy", "3", true},
+		{"probeStopHealthy", "21", false},
 	}
 	for _, c := range cases {
 		if got := validSetting(c.k, c.v); got != c.want {

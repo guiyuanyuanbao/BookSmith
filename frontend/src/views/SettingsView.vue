@@ -9,6 +9,9 @@ const saving = ref(false)
 const concurrency = ref(store.concurrency)
 const theme = ref<ThemeKey>(store.theme)
 const defaultFormats = ref<string[]>([...store.defaultFormats])
+const probeBatchSize = ref(store.probeBatchSize)
+const probeMaxSources = ref(store.probeMaxSources)
+const probeStopHealthy = ref(store.probeStopHealthy)
 const bookView = ref(store.bookView)
 const themes = THEMES
 
@@ -31,6 +34,10 @@ async function save() {
     ElMessage.warning('请至少选择一种默认导出格式')
     return
   }
+  if (probeStopHealthy.value > probeMaxSources.value) {
+    ElMessage.warning('健康即停阈值不能大于最大探测源数')
+    return
+  }
   saving.value = true
   try {
     await store.save({
@@ -38,6 +45,9 @@ async function save() {
       concurrency: concurrency.value,
       defaultFormats: [...defaultFormats.value],
       bookView: bookView.value,
+      probeBatchSize: probeBatchSize.value,
+      probeMaxSources: probeMaxSources.value,
+      probeStopHealthy: probeStopHealthy.value,
     })
     ElMessage.success('设置已保存')
   } catch (e: any) {
@@ -94,6 +104,26 @@ async function save() {
             <el-checkbox value="md">Markdown</el-checkbox>
           </el-checkbox-group>
         </el-form-item>
+        <el-form-item label="目录探测">
+          <div class="probe-grid">
+            <div class="probe-item">
+              <span class="probe-label">每批探测源数</span>
+              <el-input-number v-model="probeBatchSize" :min="1" :max="20" />
+            </div>
+            <div class="probe-item">
+              <span class="probe-label">最多探测源数</span>
+              <el-input-number v-model="probeMaxSources" :min="1" :max="100" />
+            </div>
+            <div class="probe-item">
+              <span class="probe-label">健康即停阈值</span>
+              <el-input-number v-model="probeStopHealthy" :min="1" :max="20" />
+            </div>
+          </div>
+          <div class="muted">
+            比源对话框点「探测目录质量」时：按响应速度每 {{ probeBatchSize }} 个源一批探测，
+            探到 {{ probeStopHealthy }} 个健康源即停，最多探测 {{ probeMaxSources }} 个源
+          </div>
+        </el-form-item>
       </el-form>
 
       <div style="margin-top: 16px">
@@ -111,6 +141,9 @@ async function save() {
   padding: 24px 28px;
   box-shadow: var(--bs-shadow);
 }
+.probe-grid { display: flex; gap: 20px; flex-wrap: wrap; }
+.probe-item { display: flex; flex-direction: column; gap: 6px; }
+.probe-label { font-size: 12.5px; color: var(--bs-text-sub); }
 .section-title {
   font-size: 15px;
   font-weight: 600;

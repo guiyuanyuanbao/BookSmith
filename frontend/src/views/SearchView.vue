@@ -159,8 +159,9 @@ async function startProbe() {
   const all = [...pickItem.value.origins].sort((a, b) => (a.respondTime || 9999) - (b.respondTime || 9999))
   if (!all.length) return
   probing.value = true
-  const BATCH = 6
-  const MAX_TOTAL = Math.min(36, all.length)
+  const BATCH = Math.max(1, settings.probeBatchSize)
+  const MAX_TOTAL = Math.min(Math.max(1, settings.probeMaxSources), all.length)
+  const STOP_HEALTHY = Math.max(1, settings.probeStopHealthy)
   let cursor = 0
   try {
     while (cursor < MAX_TOTAL) {
@@ -176,7 +177,7 @@ async function startProbe() {
       }
       cursor += batch.length
       const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
-      if (okCount >= 3) break
+      if (okCount >= STOP_HEALTHY) break
     }
   } catch (e: any) {
     ElMessage.error('探测失败：' + e.message)
