@@ -35,7 +35,10 @@ type App struct {
 	SearchMu    sync.Mutex
 	CleanupJobs map[string]*CleanupJob
 	CleanupMu   sync.Mutex
-	CoverClient *http.Client
+	// 书源广场异步同步任务
+	RepoSyncJobs map[string]*source.SyncJob
+	RepoSyncMu   sync.Mutex
+	CoverClient  *http.Client
 	// 封面 LRU：mem 为内存热缓存（256 条），disk 为磁盘 covers 目录索引
 	// （上限 5000 个文件/500MB，超限驱逐最冷文件，防止缓存无限增长）
 	CoverMemLRU  *CoverLRU
@@ -56,6 +59,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sources", s.handleListSources)
 	mux.HandleFunc("POST /api/sources/import", s.handleImportSources)
 	mux.HandleFunc("POST /api/sources/sync", s.handleSyncRepo)
+	mux.HandleFunc("GET /api/sources/sync/{id}", s.handleSyncRepoStatus)
+	mux.HandleFunc("DELETE /api/sources/sync/{id}", s.handleSyncRepoCancel)
 	mux.HandleFunc("GET /api/sources/repos", s.handleRepos)
 	mux.HandleFunc("GET /api/sources/export", s.handleExportSources)
 	mux.HandleFunc("PATCH /api/sources/{url}", s.handlePatchSource)
@@ -186,25 +191,82 @@ func (s *Server) handleImportSources(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, res)
 }
 
+// handleSyncRepo 启动异步仓库同步任务（书源广场）。
+// body: {url, name?, kind?, cleanup?}；立即返回 {jobId}，进度走 GET /api/sources/sync/{id} 或 SSE。
 func (s *Server) handleSyncRepo(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL string `json:"url"`
+		URL     string `json:"url"`
+		Name    string `json:"name"`
+		Kind    string `json:"kind"`
+		Cleanup bool   `json:"cleanup"`
 	}
 	if err := readJSON(r, &req); err != nil || req.URL == "" {
 		writeErr(w, 400, "需要 url 字段")
 		return
 	}
-	for _, repo := range s.app.SourceMgr.BuiltinRepos() {
-		if repo.URL == req.URL {
-			writeOK(w, s.app.SourceMgr.SyncRepo(repo))
-			return
-		}
+	if req.Kind == "" {
+		req.Kind = "bookSource"
 	}
-	writeOK(w, s.app.SourceMgr.SyncRepo(model.SourceRepo{Name: "自定义", URL: req.URL, Kind: "bookSource"}))
+	if req.Name == "" {
+		req.Name = "自定义"
+	}
+	job, err := s.app.SourceMgr.StartSyncJob(model.SourceRepo{Name: req.Name, URL: req.URL, Kind: req.Kind}, req.Cleanup, s.app.Bus.Publish)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	s.app.RepoSyncMu.Lock()
+	s.app.RepoSyncJobs[job.ID] = job
+	// 只保留最近 8 个已完成任务
+	for len(s.app.RepoSyncJobs) > 8 {
+		oldest := ""
+		for id, j := range s.app.RepoSyncJobs {
+			if !j.Snapshot().Running {
+				oldest = id
+				break
+			}
+		}
+		if oldest == "" {
+			break
+		}
+		delete(s.app.RepoSyncJobs, oldest)
+	}
+	s.app.RepoSyncMu.Unlock()
+	writeOK(w, map[string]any{"jobId": job.ID, "repoName": job.RepoName})
 }
 
+// handleSyncRepoStatus 查询同步任务进度。
+func (s *Server) handleSyncRepoStatus(w http.ResponseWriter, r *http.Request) {
+	s.app.RepoSyncMu.Lock()
+	job := s.app.RepoSyncJobs[r.PathValue("id")]
+	s.app.RepoSyncMu.Unlock()
+	if job == nil {
+		writeErr(w, 404, "同步任务不存在或已过期")
+		return
+	}
+	writeOK(w, job.Snapshot())
+}
+
+// handleSyncRepoCancel 取消同步任务。
+func (s *Server) handleSyncRepoCancel(w http.ResponseWriter, r *http.Request) {
+	s.app.RepoSyncMu.Lock()
+	job := s.app.RepoSyncJobs[r.PathValue("id")]
+	s.app.RepoSyncMu.Unlock()
+	if job == nil {
+		writeErr(w, 404, "同步任务不存在或已过期")
+		return
+	}
+	job.Cancel()
+	writeOK(w, nil)
+}
+
+// handleRepos 书源广场：动态发现全部内置站点的仓库条目（仅写死站点根地址）。
 func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
-	writeOK(w, s.app.SourceMgr.BuiltinRepos())
+	force := r.URL.Query().Get("refresh") == "1"
+	if force {
+		s.app.SourceMgr.ClearDiscoveryCache()
+	}
+	writeOK(w, map[string]any{"providers": s.app.SourceMgr.DiscoverAll()})
 }
 
 func (s *Server) handleExportSources(w http.ResponseWriter, r *http.Request) {

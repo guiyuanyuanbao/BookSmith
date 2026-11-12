@@ -224,10 +224,15 @@ func TaskStatusName(s TaskStatus) string {
 	return "unknown"
 }
 
-// SourceRepo 内置书源仓库定义（实时同步目标）。
+// SourceRepo 书源仓库条目（运行时从仓库站点动态发现，代码不写死具体 URL）。
 type SourceRepo struct {
-	Name string `json:"name"` // 显示名，如"全量书源"、"XIU2精品书源"
+	Name string `json:"name"` // 显示名，如"全量书源"、"精品书源合集"
 	URL  string `json:"url"`  // 书源 JSON 直链
 	Kind string `json:"kind"` // bookSource / replaceRule
 	Note string `json:"note,omitempty"`
+	// 动态发现元数据
+	Provider     string `json:"provider,omitempty"`     // 所属站点 key（aoaostar / yiove）
+	CollectionID string `json:"collectionId,omitempty"` // yiove 合集 ID
+	Total        int    `json:"total,omitempty"`        // 合集/仓库书源数
+	UpdatedAt    int64  `json:"updatedAt,omitempty"`    // 仓库条目更新时间（秒）
 }

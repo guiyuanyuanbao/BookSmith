@@ -258,6 +258,33 @@ export interface SourceRepo {
   url: string
   kind: string
   note?: string
+  provider?: string
+  collectionId?: string
+  total?: number
+  updatedAt?: number
+}
+
+export interface RepoProviderResult {
+  key: string
+  label: string
+  root: string
+  repos: SourceRepo[]
+  err?: string
+  elapsedMs?: number
+  cached?: boolean
+}
+
+export interface RepoSyncProgress {
+  repoName: string
+  total: number
+  done: number
+  inserted: number
+  updated: number
+  removed?: number
+  running: boolean
+  finished: boolean
+  err?: string
+  elapsedMs?: number
 }
 
 export interface ImportResult {
@@ -338,8 +365,13 @@ export const api = {
     apiGet<{ items: BookSource[]; total: number }>('/api/sources', params),
   importSources: (body: { url?: string; text?: string }) =>
     apiPost<ImportResult>('/api/sources/import', body),
-  syncRepo: (url: string) => apiPost<ImportResult>('/api/sources/sync', { url }),
-  repos: () => apiGet<SourceRepo[]>('/api/sources/repos'),
+  // 书源广场：动态发现仓库条目 + 异步同步任务
+  syncRepoStart: (body: { url: string; name?: string; kind?: string; cleanup?: boolean }) =>
+    apiPost<{ jobId: string; repoName: string }>('/api/sources/sync', body),
+  syncRepoStatus: (id: string) => apiGet<RepoSyncProgress>(`/api/sources/sync/${id}`),
+  syncRepoCancel: (id: string) => apiDelete(`/api/sources/sync/${id}`),
+  repos: (refresh = false) =>
+    apiGet<{ providers: RepoProviderResult[] }>('/api/sources/repos', refresh ? { refresh: 1 } : undefined),
   exportSources: () => withKey(`/api/sources/export`),
   setSourceEnabled: (url: string, enabled: boolean) =>
     apiPatch(`/api/sources/${encodeURIComponent(url)}`, { enabled }),

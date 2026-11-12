@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type ImportResult } from '@/api'
+import { Loading } from '@element-plus/icons-vue'
+import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type RepoProviderResult, type RepoSyncProgress, type ImportResult } from '@/api'
 
 const items = ref<BookSource[]>([])
 const total = ref(0)
@@ -16,9 +17,14 @@ const importURL = ref('')
 const importText = ref('')
 const importing = ref(false)
 
-const repos = ref<SourceRepo[]>([])
+// 书源广场（动态发现 + 异步同步）
 const reposDlg = ref(false)
-const syncing = ref<Record<string, boolean>>({})
+const providers = ref<RepoProviderResult[]>([])
+const providersLoading = ref(false)
+const providersErr = ref('')
+const activeProvider = ref('aoaostar')
+const selectedRepos = ref<SourceRepo[]>([])
+const repoCleanup = ref(false)
 
 // 校验
 const verifying = ref(false)
@@ -215,25 +221,99 @@ async function doImport() {
 
 async function openRepos() {
   reposDlg.value = true
+  await loadRepos(false)
+}
+
+async function loadRepos(refresh: boolean) {
+  providersLoading.value = true
+  providersErr.value = ''
   try {
-    repos.value = await api.repos()
+    const r = await api.repos(refresh)
+    providers.value = r.providers
   } catch (e: any) {
-    ElMessage.error(e.message)
+    providersErr.value = e.message || '仓库发现失败'
+  } finally {
+    providersLoading.value = false
   }
 }
 
-async function syncRepo(repo: SourceRepo) {
-  syncing.value[repo.url] = true
-  try {
-    const r = await api.syncRepo(repo.url)
-    ElMessage.success(`「${repo.name}」同步完成：新增 ${r.inserted}，更新 ${r.updated}`)
-    load()
-  } catch (e: any) {
-    ElMessage.error(`${repo.name}: ${e.message}`)
-  } finally {
-    syncing.value[repo.url] = false
+// ---------- 书源广场：异步同步 ----------
+const syncJob = ref<{ id: string; progress: RepoSyncProgress } | null>(null)
+let syncPollTimer: number | null = null
+
+function stopSyncPoll() {
+  if (syncPollTimer !== null) {
+    clearInterval(syncPollTimer)
+    syncPollTimer = null
   }
 }
+
+async function pollSyncJob(id: string) {
+  try {
+    const p = await api.syncRepoStatus(id)
+    if (syncJob.value) syncJob.value.progress = p
+    if (!p.running && p.finished) {
+      stopSyncPoll()
+      if (p.err) {
+        ElMessage.error(`「${p.repoName}」同步失败：${p.err}`)
+      } else {
+        ElMessage.success(
+          `「${p.repoName}」同步完成：新增 ${p.inserted}，更新 ${p.updated}` +
+            (p.removed ? `，清理同仓旧源 ${p.removed}` : ''),
+        )
+      }
+      load()
+    }
+  } catch {
+    /* 任务可能已过期，停止轮询 */
+    stopSyncPoll()
+  }
+}
+
+/** 启动一个仓库的异步同步（cleanup=清理同仓旧源） */
+async function syncRepo(repo: SourceRepo, cleanup = false) {
+  if (syncJob.value?.progress.running) {
+    ElMessage.warning('已有同步任务进行中')
+    return
+  }
+  try {
+    const r = await api.syncRepoStart({ url: repo.url, name: repo.name, kind: repo.kind, cleanup })
+    syncJob.value = { id: r.jobId, progress: { repoName: r.repoName, total: 0, done: 0, inserted: 0, updated: 0, running: true, finished: false } }
+    stopSyncPoll()
+    syncPollTimer = window.setInterval(() => pollSyncJob(r.jobId), 1000)
+  } catch (e: any) {
+    ElMessage.error(`${repo.name}: ${e.message}`)
+  }
+}
+
+/** 批量同步选中的 yiove 合集（顺序逐个） */
+async function syncSelectedRepos() {
+  const list = selectedRepos.value
+  if (!list.length) return
+  for (const repo of list) {
+    await syncRepo(repo, false)
+    // 等当前任务完成再继续（轮询中 progress.finished 置位）
+    await new Promise<void>((resolve) => {
+      const t = setInterval(() => {
+        if (!syncJob.value?.progress.running) {
+          clearInterval(t)
+          resolve()
+        }
+      }, 500)
+    })
+  }
+  selectedRepos.value = []
+}
+
+async function cancelSync() {
+  if (!syncJob.value) return
+  try {
+    await api.syncRepoCancel(syncJob.value.id)
+    ElMessage.info('已请求取消')
+  } catch { /* ignore */ }
+}
+
+onUnmounted(stopSyncPoll)
 
 function exportAll() {
   window.open(api.exportSources(), '_blank')
@@ -294,7 +374,7 @@ onMounted(load)
       </el-select>
       <div class="spacer" />
       <el-button type="primary" @click="importDlg = true">导入书源</el-button>
-      <el-button @click="openRepos">内置仓库同步</el-button>
+      <el-button @click="openRepos">书源广场</el-button>
       <el-button :loading="verifying" @click="verifyPage">校验本页</el-button>
       <el-button v-if="batchMode" :disabled="!selected.length" type="primary" @click="batchAction('enable')">
         启用 ({{ selected.length }})
@@ -373,21 +453,91 @@ onMounted(load)
       </template>
     </el-dialog>
 
-    <el-dialog v-model="reposDlg" title="内置书源仓库（实时同步）" width="640">
-      <el-table :data="repos">
-        <el-table-column prop="name" label="仓库" min-width="180" />
-        <el-table-column prop="note" label="说明" min-width="160" />
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button type="primary" size="small" :loading="syncing[row.url]" @click="syncRepo(row)">
-              同步
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <p class="muted" style="margin-top: 10px">
-        同步会实时拉取仓库最新书源并按 URL 去重合并，重复源自动更新。全量书源数千条，搜索时建议先「校验本页」剔除失效源。
-      </p>
+    <el-dialog v-model="reposDlg" title="书源广场（实时同步仓库）" width="760" @closed="stopSyncPoll">
+      <!-- 发现状态 -->
+      <div v-if="providersLoading" style="padding: 30px 0; text-align: center">
+        <el-icon class="is-loading" :size="26"><Loading /></el-icon>
+        <div class="muted" style="margin-top: 10px">正在从仓库站点动态发现可用书源仓库…</div>
+      </div>
+      <div v-else-if="providersErr" style="text-align: center; padding: 20px 0">
+        <div style="color: var(--el-color-danger); margin-bottom: 12px">{{ providersErr }}</div>
+        <el-button size="small" @click="loadRepos(false)">重试</el-button>
+      </div>
+      <template v-else>
+        <el-tabs v-model="activeProvider">
+          <el-tab-pane
+            v-for="p in providers"
+            :key="p.key"
+            :name="p.key"
+            :label="p.label + (p.err ? '（失败）' : `（${p.repos.length}）`)"
+          >
+            <div v-if="p.err" style="text-align: center; padding: 20px 0">
+              <div style="color: var(--el-color-danger); margin-bottom: 12px">发现失败：{{ p.err }}</div>
+              <el-button size="small" @click="loadRepos(true)">重试</el-button>
+            </div>
+            <template v-else>
+              <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center">
+                <el-checkbox v-if="p.key === 'yiove'" v-model="repoCleanup">同步时清理本仓库旧源（先清后导，保持与站点一致）</el-checkbox>
+                <div class="spacer" />
+                <span class="muted" style="font-size: 12px">
+                  来自 <code>{{ p.root }}</code>（运行时动态发现{{ p.cached ? ' · 缓存' : '' }}{{ p.elapsedMs ? ` · ${fmtMs(p.elapsedMs)}` : '' }}）
+                </span>
+                <el-button size="small" @click="loadRepos(true)">刷新</el-button>
+                <el-button
+                  v-if="p.key === 'yiove'"
+                  size="small" type="primary" plain
+                  :disabled="!selectedRepos.length || !!syncJob?.progress.running"
+                  @click="syncSelectedRepos"
+                >批量同步选中 ({{ selectedRepos.length }})</el-button>
+              </div>
+              <el-table
+                :data="p.repos"
+                max-height="320"
+                size="small"
+                @selection-change="(rows: SourceRepo[]) => selectedRepos = rows"
+              >
+                <el-table-column v-if="p.key === 'yiove'" type="selection" width="42" />
+                <el-table-column prop="name" label="仓库" min-width="150" show-overflow-tooltip />
+                <el-table-column prop="note" label="说明" min-width="180" show-overflow-tooltip />
+                <el-table-column label="操作" width="110">
+                  <template #default="{ row }">
+                    <el-button
+                      size="small" type="primary" plain
+                      :disabled="!!syncJob?.progress.running"
+                      @click="syncRepo(row, repoCleanup && p.key === 'yiove')"
+                    >同步</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </template>
+          </el-tab-pane>
+        </el-tabs>
+
+        <!-- 同步进度面板 -->
+        <div v-if="syncJob" class="sync-progress">
+          <div style="display: flex; align-items: center; gap: 12px">
+            <div style="flex: 1">
+              <div style="font-weight: 600; margin-bottom: 6px">
+                正在同步「{{ syncJob.progress.repoName }}」
+                <span class="muted" style="font-weight: 400">
+                  {{ syncJob.progress.done }}/{{ syncJob.progress.total || '?' }}
+                  · 新增 {{ syncJob.progress.inserted }} · 更新 {{ syncJob.progress.updated }}
+                </span>
+              </div>
+              <el-progress
+                :percentage="syncJob.progress.total ? Math.round((syncJob.progress.done / syncJob.progress.total) * 100) : 10"
+                :stroke-width="8"
+              />
+            </div>
+            <el-button v-if="syncJob.progress.running" size="small" @click="cancelSync">取消</el-button>
+          </div>
+        </div>
+
+        <p class="muted" style="margin-top: 10px">
+          仓库列表在打开广场时从各站点实时发现（站点仅以根地址内置，条目动态获取，站点换源无需更新软件）。
+          同步按 URL 去重合并；大合集为异步任务，可随时取消。
+        </p>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="cleanupDlg" title="一键清理失效书源" width="680">

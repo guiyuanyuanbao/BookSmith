@@ -247,17 +247,11 @@ func (m *Manager) ExportSources(enabledOnly bool) ([]byte, error) {
 // SourceRepo 内置书源仓库（复用 model 定义）。
 type SourceRepo = model.SourceRepo
 
-// BuiltinRepos 内置仓库清单（「阅读」APP 生态实时源，主项为 aoaostar）。
-func BuiltinRepos() []SourceRepo {
-	return []SourceRepo{
-		{Name: "全量书源（aoaostar）", URL: "https://legado.aoaostar.com/sources/b778fe6b.json", Kind: "bookSource", Note: "聚合 3900+ 书源"},
-		{Name: "XIU2精品书源", URL: "https://legado.aoaostar.com/sources/71e56d4f.json", Kind: "bookSource", Note: "精选 20+ 稳定源"},
-		{Name: "破冰书源", URL: "https://legado.aoaostar.com/sources/4dc410d1.json", Kind: "bookSource"},
-		{Name: "关耳女频", URL: "https://legado.aoaostar.com/sources/e3e5d620.json", Kind: "bookSource"},
-		{Name: "三舞313书源", URL: "https://legado.aoaostar.com/sources/2a1f129b.json", Kind: "bookSource"},
-		{Name: "开源阅读软件书源", URL: "https://legado.aoaostar.com/sources/3bb7b751.json", Kind: "bookSource"},
-		{Name: "乌云净化（净化规则）", URL: "https://legado.aoaostar.com/sources/3f067eb2.json", Kind: "replaceRule", Note: "通用广告净化"},
-	}
+// ClearDiscoveryCache 清空仓库发现缓存（前端「刷新」按钮）。
+func (m *Manager) ClearDiscoveryCache() {
+	discoveryCache.mu.Lock()
+	discoveryCache.items = map[string]cachedDiscovery{}
+	discoveryCache.mu.Unlock()
 }
 
 // SyncStatus 同步状态。
@@ -266,17 +260,14 @@ type SyncStatus struct {
 	Total     int    `json:"total"`
 	Inserted  int    `json:"inserted"`
 	Updated   int    `json:"updated"`
+	Removed   int    `json:"removed,omitempty"` // 同仓清理移除的失效旧源数
 	Err       string `json:"err,omitempty"`
 	ElapsedMS int64  `json:"elapsedMs"`
 }
 
-// BuiltinRepos 内置仓库列表。
-func (m *Manager) BuiltinRepos() []SourceRepo {
-	return BuiltinRepos()
-}
-
-// SyncRepo 实时同步一个内置仓库。
-func (m *Manager) SyncRepo(repo SourceRepo) *SyncStatus {
+// SyncRepo 实时同步一个仓库直链（拉取 → 解析 → 去重入库）。
+// cleanup=true 时同步成功后清理该仓库 origin 下已消失的旧源（custom=0，不影响手动导入源）。
+func (m *Manager) SyncRepo(repo SourceRepo, cleanup bool) *SyncStatus {
 	m.mu.Lock()
 	if m.syncing[repo.URL] {
 		m.mu.Unlock()
@@ -302,6 +293,13 @@ func (m *Manager) SyncRepo(repo SourceRepo) *SyncStatus {
 	if resp.StatusCode != 200 {
 		st.Err = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		return st
+	}
+	// 同仓清理：上次导入但本次仓库已不再提供的源（仅限本仓库 origin，且非手动导入）
+	// 语义为"同步前清理"——先清后导，避免误删刚导入的新源。
+	if cleanup && st.Err == "" && repo.Kind != "replaceRule" {
+		if n, cerr := m.st.DeleteSourcesByOrigin(repo.URL); cerr == nil && n > 0 {
+			st.Removed = int(n)
+		}
 	}
 	switch repo.Kind {
 	case "replaceRule":

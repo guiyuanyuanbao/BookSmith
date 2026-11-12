@@ -108,15 +108,16 @@ func main() {
 	}
 
 	app := &server.App{
-		SourceMgr:   srcMgr,
-		WebBook:     svc,
-		TaskMgr:     taskMgr,
-		Store:       st,
-		DataDir:     *dataDir,
-		Version:     version,
-		Bus:         bus,
-		SearchJobs:  map[string]*server.SearchJob{},
-		CleanupJobs: map[string]*server.CleanupJob{},
+		SourceMgr:    srcMgr,
+		WebBook:      svc,
+		TaskMgr:      taskMgr,
+		Store:        st,
+		DataDir:      *dataDir,
+		Version:      version,
+		Bus:          bus,
+		SearchJobs:   map[string]*server.SearchJob{},
+		CleanupJobs:  map[string]*server.CleanupJob{},
+		RepoSyncJobs: map[string]*source.SyncJob{},
 	}
 	app.StartCoverProxy()
 	coverProvider = func(rawURL string) *export.CoverImage {

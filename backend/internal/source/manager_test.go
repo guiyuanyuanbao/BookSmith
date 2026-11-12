@@ -158,20 +158,19 @@ func TestImportReplaceAndSyncRepo(t *testing.T) {
 		t.Fatalf("rules = %+v", rules)
 	}
 
-	// 内置仓库列表应包含 aoaostar
-	repos := BuiltinRepos()
+	// 内置提供站点清单应包含 aoaostar（风险隔离：只写死站点根地址）
 	found := false
-	for _, r := range repos {
-		if strings.Contains(r.URL, "legado.aoaostar.com") {
+	for _, p := range BuiltinProviders {
+		if strings.Contains(p.Root, "legado.aoaostar.com") {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("aoaostar repo missing")
+		t.Error("aoaostar provider missing")
 	}
 
 	// 同步仓库（本地 HTTP 模拟）
-	status := m.SyncRepo(SourceRepo{Name: "模拟仓库", URL: srv.URL, Kind: "replaceRule"})
+	status := m.SyncRepo(SourceRepo{Name: "模拟仓库", URL: srv.URL, Kind: "replaceRule"}, false)
 	if status.Err != "" || status.Inserted != 0 {
 		t.Logf("sync status: %+v (id 冲突视为更新)", status)
 	}
@@ -187,7 +186,7 @@ func TestSyncConcurrentGuard(t *testing.T) {
 	m.mu.Lock()
 	m.syncing[srv.URL] = true
 	m.mu.Unlock()
-	status := m.SyncRepo(SourceRepo{Name: "x", URL: srv.URL, Kind: "bookSource"})
+	status := m.SyncRepo(SourceRepo{Name: "x", URL: srv.URL, Kind: "bookSource"}, false)
 	if status.Err != "同步进行中" {
 		t.Errorf("guard = %+v", status)
 	}
