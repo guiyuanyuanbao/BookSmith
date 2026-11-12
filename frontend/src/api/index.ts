@@ -272,6 +272,23 @@ export interface RepoProviderResult {
   err?: string
   elapsedMs?: number
   cached?: boolean
+  sourceList?: { apiBase: string; total: number; pages: number }
+}
+
+export interface YioveSourceItem {
+  id: string
+  name: string
+  url: string
+  isValid: boolean
+  viewTotal: number
+  updatedAt: number
+}
+
+export interface YioveSourcePage {
+  items: YioveSourceItem[]
+  page: number
+  pages: number
+  total: number
 }
 
 export interface RepoSyncProgress {
@@ -372,6 +389,13 @@ export const api = {
   syncRepoCancel: (id: string) => apiDelete(`/api/sources/sync/${id}`),
   repos: (refresh = false) =>
     apiGet<{ providers: RepoProviderResult[] }>('/api/sources/repos', refresh ? { refresh: 1 } : undefined),
+  // yiove 单源列表分页 / 站内搜索 / 页码→序号段导入直链
+  yioveSourceList: (apiBase: string, page: number, pageSize = 20) =>
+    apiGet<YioveSourcePage>('/api/sources/yiove-list', { apiBase, page, pageSize }),
+  yioveSearch: (apiBase: string, keyword: string, type: 'book-sources' | 'book-source-collections', page = 1, pageSize = 20) =>
+    apiGet<YioveSourcePage>('/api/sources/yiove-search', { apiBase, keyword, type, page, pageSize }),
+  yioveImportURL: (apiBase: string, page: number, pageSize = 20) =>
+    apiGet<{ url: string }>('/api/sources/yiove-import-url', { apiBase, page, pageSize }),
   exportSources: () => withKey(`/api/sources/export`),
   setSourceEnabled: (url: string, enabled: boolean) =>
     apiPatch(`/api/sources/${encodeURIComponent(url)}`, { enabled }),

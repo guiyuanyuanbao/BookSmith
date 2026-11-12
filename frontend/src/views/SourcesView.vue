@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
-import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type RepoProviderResult, type RepoSyncProgress, type ImportResult } from '@/api'
+import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type RepoProviderResult, type RepoSyncProgress, type ImportResult, type YioveSourcePage } from '@/api'
 
 const items = ref<BookSource[]>([])
 const total = ref(0)
@@ -25,6 +25,88 @@ const providersErr = ref('')
 const activeProvider = ref('aoaostar')
 const selectedRepos = ref<SourceRepo[]>([])
 const repoCleanup = ref(false)
+// 顶层分类：书源仓库 / 净化规则仓库（两类分开，避免混在一起找）
+const repoCategory = ref<'source' | 'replace'>('source')
+// yiove 单源列表（3 万+ 单源）分页浏览/搜索
+const yioveView = ref<'collections' | 'list'>('collections')
+// 切到全量书源视图时自动加载第一页（发现结果已带 sourceList 元信息）
+watch(yioveView, (v) => {
+  if (v === 'list' && !yioveListData.value) loadYioveList(1)
+})
+const yioveListPage = ref(1)
+const yioveListData = ref<YioveSourcePage | null>(null)
+const yioveListLoading = ref(false)
+const yioveSearchKeyword = ref('')
+const yioveSearchType = ref<'book-sources' | 'book-source-collections'>('book-sources')
+const yioveSearching = ref(false)
+
+/** 当前分类下某 provider 的仓库条目 */
+function reposOfCategory(p: RepoProviderResult): SourceRepo[] {
+  const want = repoCategory.value === 'source' ? 'bookSource' : 'replaceRule'
+  return p.repos.filter((r) => (r.kind || 'bookSource') === want)
+}
+
+/** 当前分类下各 provider 是否有内容（无内容的 provider Tab 隐藏） */
+function providerHasCategory(p: RepoProviderResult): boolean {
+  return !p.err && reposOfCategory(p).length > 0
+}
+
+const visibleProviders = computed(() =>
+  repoCategory.value === 'source'
+    ? providers.value.filter((p) => p.err || providerHasCategory(p))
+    : providers.value.filter((p) => p.err || providerHasCategory(p)),
+)
+
+const yioveProvider = computed(() => providers.value.find((p) => p.key === 'yiove'))
+
+async function loadYioveList(page = 1) {
+  const meta = yioveProvider.value?.sourceList
+  if (!meta) return
+  yioveListLoading.value = true
+  try {
+    yioveListData.value = await api.yioveSourceList(meta.apiBase, page, 20)
+    yioveListPage.value = page
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  } finally {
+    yioveListLoading.value = false
+  }
+}
+
+async function doYioveSearch(page = 1) {
+  const meta = yioveProvider.value?.sourceList
+  if (!meta || !yioveSearchKeyword.value.trim()) return
+  yioveSearching.value = true
+  try {
+    yioveListData.value = await api.yioveSearch(meta.apiBase, yioveSearchKeyword.value.trim(), yioveSearchType.value, page, 20)
+    yioveListPage.value = page
+    yioveView.value = 'list'
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  } finally {
+    yioveSearching.value = false
+  }
+}
+
+/** 导入 yiove 单源列表某页（序号段直链 → 异步同步任务） */
+async function importYiovePage(page: number) {
+  const meta = yioveProvider.value?.sourceList
+  if (!meta) return
+  try {
+    const r = await api.yioveImportURL(meta.apiBase, page, 20)
+    await syncRepo(
+      { name: `Yiove 第 ${page} 页单源`, url: r.url, kind: 'bookSource', provider: 'yiove' },
+      false,
+    )
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  }
+}
+
+/** 导入搜索结果页（用当前列表页序号段不行——搜索结果是过滤后的，直接拉同一页号不精确）
+ *  改为：搜索页只提供逐条查看，导入走合集或分页列表的序号段。 */
+
+const currentProvider = computed(() => providers.value.find((p) => p.key === activeProvider.value))
 
 // 校验
 const verifying = ref(false)
@@ -464,39 +546,118 @@ onMounted(load)
         <el-button size="small" @click="loadRepos(false)">重试</el-button>
       </div>
       <template v-else>
+        <!-- 顶层分类：书源 / 净化规则 分开 -->
+        <el-radio-group v-model="repoCategory" style="margin-bottom: 12px">
+          <el-radio-button value="source">书源仓库</el-radio-button>
+          <el-radio-button value="replace">净化规则仓库</el-radio-button>
+        </el-radio-group>
+
         <el-tabs v-model="activeProvider">
           <el-tab-pane
-            v-for="p in providers"
+            v-for="p in visibleProviders"
             :key="p.key"
             :name="p.key"
-            :label="p.label + (p.err ? '（失败）' : `（${p.repos.length}）`)"
+            :label="p.label + (p.err ? '（失败）' : `（${reposOfCategory(p).length}）`)"
           >
             <div v-if="p.err" style="text-align: center; padding: 20px 0">
               <div style="color: var(--el-color-danger); margin-bottom: 12px">发现失败：{{ p.err }}</div>
               <el-button size="small" @click="loadRepos(true)">重试</el-button>
             </div>
-            <template v-else>
+            <template v-else-if="repoCategory === 'source' && p.key === 'yiove' && p.sourceList">
+              <!-- yiove 书源：合集/单源列表两个视图 -->
               <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center">
-                <el-checkbox v-if="p.key === 'yiove'" v-model="repoCleanup">同步时清理本仓库旧源（先清后导，保持与站点一致）</el-checkbox>
+                <el-radio-group v-model="yioveView" size="small">
+                  <el-radio-button value="collections">精选合集（{{ reposOfCategory(p).length }}）</el-radio-button>
+                  <el-radio-button value="list">全量书源（{{ p.sourceList.total }}）</el-radio-button>
+                </el-radio-group>
                 <div class="spacer" />
-                <span class="muted" style="font-size: 12px">
-                  来自 <code>{{ p.root }}</code>（运行时动态发现{{ p.cached ? ' · 缓存' : '' }}{{ p.elapsedMs ? ` · ${fmtMs(p.elapsedMs)}` : '' }}）
-                </span>
                 <el-button size="small" @click="loadRepos(true)">刷新</el-button>
-                <el-button
-                  v-if="p.key === 'yiove'"
-                  size="small" type="primary" plain
-                  :disabled="!selectedRepos.length || !!syncJob?.progress.running"
-                  @click="syncSelectedRepos"
-                >批量同步选中 ({{ selectedRepos.length }})</el-button>
               </div>
-              <el-table
-                :data="p.repos"
-                max-height="320"
-                size="small"
-                @selection-change="(rows: SourceRepo[]) => selectedRepos = rows"
-              >
-                <el-table-column v-if="p.key === 'yiove'" type="selection" width="42" />
+
+              <!-- 全量单源列表视图：搜索 + 分页导入 -->
+              <template v-if="yioveView === 'list'">
+                <div style="display: flex; gap: 8px; margin-bottom: 10px">
+                  <el-input
+                    v-model="yioveSearchKeyword"
+                    placeholder="按书源名称搜索（如：笔趣阁）"
+                    style="width: 260px" clearable
+                    @keyup.enter="doYioveSearch(1)"
+                  />
+                  <el-select v-model="yioveSearchType" style="width: 110px">
+                    <el-option value="book-sources" label="搜书源" />
+                    <el-option value="book-source-collections" label="搜合集" />
+                  </el-select>
+                  <el-button :loading="yioveSearching" @click="doYioveSearch(1)">搜索</el-button>
+                  <div class="spacer" />
+                  <el-button size="small" plain :disabled="!!syncJob?.progress.running" @click="importYiovePage(yioveListPage)">
+                    导入本页（序号段直链）
+                  </el-button>
+                </div>
+                <el-table v-loading="yioveListLoading" :data="yioveListData?.items ?? []" max-height="320" size="small">
+                  <el-table-column prop="name" label="书源" min-width="170" show-overflow-tooltip />
+                  <el-table-column prop="url" label="站点" min-width="150" show-overflow-tooltip />
+                  <el-table-column label="状态" width="70">
+                    <template #default="{ row }">
+                      <el-tag :type="row.isValid ? 'success' : 'info'" size="small">{{ row.isValid ? '有效' : '未知' }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="热度" width="70">
+                    <template #default="{ row }">{{ row.viewTotal }}</template>
+                  </el-table-column>
+                </el-table>
+                <div style="display: flex; justify-content: space-between; margin-top: 8px; align-items: center">
+                  <span class="muted" style="font-size: 12px">
+                    第 {{ yioveListData?.page ?? 1 }} / {{ yioveListData?.pages ?? 1 }} 页 · 共 {{ yioveListData?.total ?? 0 }} 源（每页 20）
+                  </span>
+                  <el-pagination
+                    layout="prev, pager, next"
+                    :total="yioveListData?.total ?? 0"
+                    :page-size="20"
+                    :current-page="yioveListPage"
+                    @current-change="loadYioveList"
+                  />
+                </div>
+              </template>
+
+              <!-- 合集视图 -->
+              <template v-else>
+                <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center">
+                  <el-checkbox v-model="repoCleanup">同步时清理本仓库旧源（先清后导，保持与站点一致）</el-checkbox>
+                  <div class="spacer" />
+                  <el-button
+                    size="small" type="primary" plain
+                    :disabled="!selectedRepos.length || !!syncJob?.progress.running"
+                    @click="syncSelectedRepos"
+                  >批量同步选中 ({{ selectedRepos.length }})</el-button>
+                </div>
+                <el-table
+                  :data="reposOfCategory(p)"
+                  max-height="320"
+                  size="small"
+                  @selection-change="(rows: SourceRepo[]) => selectedRepos = rows"
+                >
+                  <el-table-column type="selection" width="42" />
+                  <el-table-column prop="name" label="合集" min-width="150" show-overflow-tooltip />
+                  <el-table-column prop="note" label="说明" min-width="180" show-overflow-tooltip />
+                  <el-table-column label="操作" width="110">
+                    <template #default="{ row }">
+                      <el-button
+                        size="small" type="primary" plain
+                        :disabled="!!syncJob?.progress.running"
+                        @click="syncRepo(row, repoCleanup)"
+                      >同步</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </template>
+            </template>
+
+            <!-- aoaostar 或其他 provider：仓库表格 -->
+            <template v-else>
+              <div v-if="p.key === 'yiove' && repoCategory === 'source'" class="muted" style="font-size: 12px; margin-bottom: 8px">
+                该站点未提供全量列表元信息（仅合集）
+              </div>
+              <el-table :data="reposOfCategory(p)" max-height="320" size="small">
                 <el-table-column prop="name" label="仓库" min-width="150" show-overflow-tooltip />
                 <el-table-column prop="note" label="说明" min-width="180" show-overflow-tooltip />
                 <el-table-column label="操作" width="110">
@@ -504,7 +665,7 @@ onMounted(load)
                     <el-button
                       size="small" type="primary" plain
                       :disabled="!!syncJob?.progress.running"
-                      @click="syncRepo(row, repoCleanup && p.key === 'yiove')"
+                      @click="syncRepo(row, false)"
                     >同步</el-button>
                   </template>
                 </el-table-column>

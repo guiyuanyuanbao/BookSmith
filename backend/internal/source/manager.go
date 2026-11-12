@@ -5,6 +5,7 @@ package source
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -28,7 +29,20 @@ func New(st *store.Store, client *httpx.Client) *Manager {
 	return &Manager{st: st, client: client, syncing: map[string]bool{}}
 }
 
+// numericStringFields legado JSON 里语义为数字但部分站点导出为字符串的字段
+// （yiove 实测 lastUpdateTime 为字符串），解析前统一归一化为数字。
+var numericStringFields = []string{
+	"lastUpdateTime", "respondTime", "weight", "customOrder", "bookSourceType",
+}
+
+// stringNumberFields 语义为字符串但部分源写成数字的字段（concurrentRate="3/1000"，
+// 个别源直接写 1000），解析前统一归一化为字符串。
+var stringNumberFields = []string{
+	"concurrentRate", "header",
+}
+
 // ParseSourceJSON 解析书源 JSON：支持单对象、数组、以及外层再包裹的字符串形式。
+// 宽容处理：数字/字符串字段类型混用时（yiove 站点源实测）归一化后重试。
 func ParseSourceJSON(data []byte) ([]*model.BookSource, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -42,15 +56,111 @@ func ParseSourceJSON(data []byte) ([]*model.BookSource, error) {
 	if err := json.Unmarshal([]byte(trimmed), &single); err == nil && single.BookSourceURL != "" {
 		return filterValidSources([]*model.BookSource{&single}), nil
 	}
+	// 字段类型宽容重试（双向归一化）后再次尝试
+	normalized := normalizeJSONFields(trimmed)
+	if err := json.Unmarshal([]byte(normalized), &arr); err == nil {
+		return filterValidSources(arr), nil
+	}
+	// 兜底：宽松两阶段解析——先 map 全收，再映射（规则字段可能被写成
+	// "字符串化 JSON"（双层编码），逐字段二次解码）
+	if list, ok := laxUnmarshalSourceList(normalized); ok && len(list) > 0 {
+		return filterValidSources(list), nil
+	}
 	// legado 导出可能带 BOM 或前后缀文字，尝试截取首个 [ ... ]
 	start := strings.Index(trimmed, "[")
 	end := strings.LastIndex(trimmed, "]")
 	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(trimmed[start:end+1]), &arr); err == nil {
+		seg := trimmed[start : end+1]
+		if err := json.Unmarshal([]byte(seg), &arr); err == nil {
+			return filterValidSources(arr), nil
+		}
+		if err := json.Unmarshal([]byte(normalizeJSONFields(seg)), &arr); err == nil {
 			return filterValidSources(arr), nil
 		}
 	}
 	return nil, fmt.Errorf("无法解析书源 JSON")
+}
+
+// numStrRe 匹配 "field":"digits" → 数字字段字符串归一化。
+var numStrRe = regexp.MustCompile(`"(` + strings.Join(numericStringFields, "|") + `)"\s*:\s*"(-?\d+)(?:\.0+)?"`)
+
+// strNumRe 匹配 "field":digits（非字符串值）→ 字符串字段数字归一化。
+// RE2 无前瞻：捕获后续分隔符，替换时原样写回。
+var strNumRe = regexp.MustCompile(`"(` + strings.Join(stringNumberFields, "|") + `)"\s*:\s*(-?\d+(?:\.\d+)?)\s*([,}\]])`)
+
+// sourceTypeStrRe bookSourceType 字符串枚举（yiove 个别源写 "TEXT"）→ 数字。
+// TEXT=0 AUDIO=1 IMAGE=2 FILE=3 VIDEO=4（legado 语义）。
+var sourceTypeStrRe = regexp.MustCompile(`"bookSourceType"\s*:\s*"(TEXT|AUDIO|IMAGE|FILE|VIDEO)"`)
+
+var sourceTypeEnum = map[string]int{"TEXT": 0, "AUDIO": 1, "IMAGE": 2, "FILE": 3, "VIDEO": 4}
+
+// laxUnmarshalSourceList 宽松两阶段解析：先解为通用 map 列表，再逐字段映射到
+// BookSource。规则字段（ruleSearch/ruleBookInfo/ruleContent/ruleExplore/ruleReview）
+// 若被站点写成"字符串化 JSON"（双层编码），此处二次解码为结构体——严格 typed 解析
+// 会因这类混用整批失败（yiove 单源实测）。二次解码失败的条目丢弃该字段（缺失优于整批失败）。
+func laxUnmarshalSourceList(data string) ([]*model.BookSource, bool) {
+	var raw []map[string]any
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return nil, false
+	}
+	ruleKeys := []string{"ruleSearch", "ruleBookInfo", "ruleContent", "ruleExplore", "ruleReview", "ruleToc"}
+	for _, item := range raw {
+		for _, k := range ruleKeys {
+			s, ok := item[k].(string)
+			if !ok {
+				continue
+			}
+			trimmed := strings.TrimSpace(s)
+			if strings.HasPrefix(trimmed, "{") {
+				var obj map[string]any
+				if json.Unmarshal([]byte(trimmed), &obj) == nil {
+					item[k] = obj
+					continue
+				}
+			}
+			// 不是对象也不像 JSON：删除（typed 解析只接受对象）
+			delete(item, k)
+		}
+		// bookSourceType 空串/未知枚举 → 默认文本源 0（typed 解析仅接受数字）
+		if v, ok := item["bookSourceType"]; ok {
+			switch t := v.(type) {
+			case string:
+				if n, found := sourceTypeEnum[t]; found {
+					item["bookSourceType"] = n
+				} else {
+					item["bookSourceType"] = 0
+				}
+			case float64:
+				// 已是数字，保留
+			default:
+				item["bookSourceType"] = 0
+			}
+		}
+	}
+	normalized, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var out []*model.BookSource
+	if err := json.Unmarshal(normalized, &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// normalizeJSONFields 双向归一化数字/字符串字段类型。
+func normalizeJSONFields(s string) string {
+	s = numStrRe.ReplaceAllString(s, `"$1":$2`)
+	s = strNumRe.ReplaceAllString(s, `"$1":"$2"$3`)
+	s = sourceTypeStrRe.ReplaceAllStringFunc(s, func(m string) string {
+		for k, v := range sourceTypeEnum {
+			if strings.Contains(m, `"`+k+`"`) {
+				return `"bookSourceType":` + fmt.Sprintf("%d", v)
+			}
+		}
+		return m
+	})
+	return s
 }
 
 // filterValidSources 过滤无效书源（必须有 URL 与名称）。

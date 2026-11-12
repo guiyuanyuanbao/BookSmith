@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -31,6 +32,12 @@ var BuiltinProviders = []RepoProvider{
 	{Key: "yiove", Label: "Yiove 书源仓库", Root: "https://shuyuan.yiove.com"},
 }
 
+// 仓库类别（书源与净化规则在广场分栏展示，避免混在一起找）。
+const (
+	RepoCategorySource  = "bookSource"  // 书源仓库
+	RepoCategoryReplace = "replaceRule" // 净化规则仓库
+)
+
 // discoverTTL 发现结果缓存时长（避免每次打开广场都抓站点）。
 const discoverTTL = 5 * time.Minute
 
@@ -41,72 +48,113 @@ var discoveryCache = struct {
 }{items: map[string]cachedDiscovery{}}
 
 type cachedDiscovery struct {
-	repos     []SourceRepo
+	result    *ProviderResult
 	fetchedAt time.Time
 }
 
 // ProviderResult 单个提供站点的发现结果（失败时 Err 非空、Repos 为空）。
+// Repos 按 Kind 分为两类：bookSource（书源仓库）与 replaceRule（净化规则仓库），
+// 前端据此分栏展示；SourceList 为 yiove 全量书源列表的元信息（分页拉取，不一次全量）。
 type ProviderResult struct {
-	Key       string       `json:"key"`
-	Label     string       `json:"label"`
-	Root      string       `json:"root"`
-	Repos     []SourceRepo `json:"repos"`
-	Err       string       `json:"err,omitempty"`
-	ElapsedMS int64        `json:"elapsedMs"`
-	Cached    bool         `json:"cached"`
+	Key        string       `json:"key"`
+	Label      string       `json:"label"`
+	Root       string       `json:"root"`
+	Repos      []SourceRepo `json:"repos"`
+	Err        string       `json:"err,omitempty"`
+	ElapsedMS  int64        `json:"elapsedMs"`
+	Cached     bool         `json:"cached"`
+	SourceList *SourceListMeta `json:"sourceList,omitempty"` // yiove 独有：全量书源列表元信息
+}
+
+// SourceListMeta yiove 单源列表元信息（3 万+ 单源分页发现）。
+type SourceListMeta struct {
+	APIBase string `json:"apiBase"` // 单源直链前缀（/import/book-sources/{start}-{end}）
+	Total   int    `json:"total"`   // 站点书源总数
+	Pages   int    `json:"pages"`   // 按 pageSize 分页数
 }
 
 // discoverCacheGet 命中未过期缓存。
-func discoverCacheGet(key string) ([]SourceRepo, bool) {
+func discoverCacheGet(key string) (*ProviderResult, bool) {
 	discoveryCache.mu.Lock()
 	defer discoveryCache.mu.Unlock()
 	c, ok := discoveryCache.items[key]
 	if !ok || time.Since(c.fetchedAt) > discoverTTL {
 		return nil, false
 	}
-	return c.repos, true
+	return c.result, true
 }
 
-func discoverCachePut(key string, repos []SourceRepo) {
+func discoverCachePut(key string, result *ProviderResult) {
 	discoveryCache.mu.Lock()
 	defer discoveryCache.mu.Unlock()
-	discoveryCache.items[key] = cachedDiscovery{repos: repos, fetchedAt: time.Now()}
+	discoveryCache.items[key] = cachedDiscovery{result: result, fetchedAt: time.Now()}
 }
 
 // fetchText 抓取 URL 文本（复用书源管理器的 httpx 客户端，带重试/限流能力）。
+// 附带 Referer：yiove 的导入直链对无 Referer 请求弹 Cloudflare 质询。
+// CF 质询页（403/422 + HTML）表现为间歇性，非 200 时间隔 2s 重试一次。
 func (m *Manager) fetchText(url string, timeout time.Duration) (string, int, error) {
-	resp, err := m.client.Do(nil, &httpx.Request{URL: url, Timeout: timeout})
-	if err != nil {
-		return "", 0, err
+	for attempt := 0; ; attempt++ {
+		resp, err := m.client.Do(nil, &httpx.Request{
+			URL:     url,
+			Timeout: timeout,
+			Headers: map[string]string{
+				"Referer": refererOf(url),
+				"Accept":  "application/json, text/html, */*",
+			},
+		})
+		if err != nil {
+			return "", 0, err
+		}
+		if resp.StatusCode == 200 {
+			return resp.BodyText(), resp.StatusCode, nil
+		}
+		text := resp.BodyText()
+		// 非成功状态：重试一次（CF 质询是间歇性的，第二次常通过）
+		if attempt < 1 && resp.StatusCode != 404 {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		return text, resp.StatusCode, nil
 	}
-	return resp.BodyText(), resp.StatusCode, nil
 }
 
-// DiscoverRepos 发现单个站点的仓库条目（带缓存）。
-func (m *Manager) DiscoverRepos(p RepoProvider) ([]SourceRepo, error) {
-	if repos, ok := discoverCacheGet(p.Key); ok {
-		return repos, nil
+// refererOf 由 URL 推导 Referer（scheme://host/）。
+func refererOf(raw string) string {
+	if i := strings.Index(raw, "://"); i > 0 {
+		host := raw[i+3:]
+		if j := strings.Index(host, "/"); j >= 0 {
+			host = host[:j]
+		}
+		return raw[:i] + "://" + host + "/"
 	}
-	var (
-		repos []SourceRepo
-		err   error
-	)
+	return ""
+}
+
+// DiscoverProvider 发现单个站点（带缓存）。
+func (m *Manager) DiscoverProvider(p RepoProvider) (*ProviderResult, error) {
+	if res, ok := discoverCacheGet(p.Key); ok {
+		return res, nil
+	}
+	var res *ProviderResult
+	var err error
 	switch p.Key {
 	case "aoaostar":
-		repos, err = m.discoverAoaostar(p.Root)
+		res, err = m.discoverAoaostar(p)
 	case "yiove":
-		repos, err = m.discoverYiove(p.Root)
+		res, err = m.discoverYiove(p)
 	default:
 		return nil, fmt.Errorf("未知仓库站点: %s", p.Key)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if len(repos) == 0 {
+	total := len(res.Repos)
+	if total == 0 && res.SourceList == nil {
 		return nil, fmt.Errorf("站点未发现任何书源仓库条目（结构可能已变化）")
 	}
-	discoverCachePut(p.Key, repos)
-	return repos, nil
+	discoverCachePut(p.Key, res)
+	return res, nil
 }
 
 // DiscoverAll 并发发现全部内置站点；单个站点失败不影响其他（错误放在各自结果里）。
@@ -119,22 +167,13 @@ func (m *Manager) DiscoverAll() []ProviderResult {
 			defer wg.Done()
 			res := ProviderResult{Key: p.Key, Label: p.Label, Root: p.Root, Repos: []SourceRepo{}}
 			start := time.Now()
-			repos, cached := func() ([]SourceRepo, bool) {
-				if repos, ok := discoverCacheGet(p.Key); ok {
-					return repos, true
-				}
-				return nil, false
-			}()
-			if cached {
-				res.Repos = repos
+			if cached, ok := discoverCacheGet(p.Key); ok {
+				res = *cached
 				res.Cached = true
+			} else if r, err := m.DiscoverProvider(p); err != nil {
+				res.Err = err.Error()
 			} else {
-				repos, err := m.DiscoverRepos(p)
-				if err != nil {
-					res.Err = err.Error()
-				} else {
-					res.Repos = repos
-				}
+				res = *r
 			}
 			res.ElapsedMS = time.Since(start).Milliseconds()
 			out[i] = res
@@ -155,15 +194,18 @@ func (m *Manager) DiscoverAll() []ProviderResult {
 // </ul></li></ul>
 
 // discoverAoaostar 抓根页并解析书源/净化规则条目（rss/theme/tts 不在本软件范围，忽略）。
-func (m *Manager) discoverAoaostar(root string) ([]SourceRepo, error) {
-	text, status, err := m.fetchText(strings.TrimRight(root, "/")+"/", 30*time.Second)
+func (m *Manager) discoverAoaostar(p RepoProvider) (*ProviderResult, error) {
+	text, status, err := m.fetchText(strings.TrimRight(p.Root, "/")+"/", 30*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("抓取 %s 失败: %w", root, err)
+		return nil, fmt.Errorf("抓取 %s 失败: %w", p.Root, err)
 	}
 	if status != 200 {
-		return nil, fmt.Errorf("抓取 %s: HTTP %d", root, status)
+		return nil, fmt.Errorf("抓取 %s: HTTP %d", p.Root, status)
 	}
-	return parseAoaostarHTML(text), nil
+	return &ProviderResult{
+		Key: p.Key, Label: p.Label, Root: p.Root,
+		Repos: parseAoaostarHTML(text),
+	}, nil
 }
 
 // parseAoaostarHTML 解析 aoaostar 首页 HTML 中的仓库条目。
@@ -290,12 +332,13 @@ func textContent(n *html.Node) string {
 // yioveCollectionsAPI 合集列表 API 路径（相对 apiBaseUrl）。
 const yioveCollectionsAPI = "/shuyuan/book-source-collections?page=1&page_size=100"
 
-// discoverYiove 发现 yiove 合集列表。
-func (m *Manager) discoverYiove(root string) ([]SourceRepo, error) {
-	apiBase, err := m.yioveAPIBase(root)
+// discoverYiove 发现 yiove：合集列表 + 全量单源列表元信息（书源/净化规则分开由 Kind/SourceList 区分）。
+func (m *Manager) discoverYiove(p RepoProvider) (*ProviderResult, error) {
+	apiBase, err := m.yioveAPIBase(p.Root)
 	if err != nil {
 		return nil, err
 	}
+	// 合集（精选聚合，导入价值最高）
 	text, status, err := m.fetchText(strings.TrimRight(apiBase, "/")+yioveCollectionsAPI, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("抓取 yiove 合集失败: %w", err)
@@ -303,7 +346,42 @@ func (m *Manager) discoverYiove(root string) ([]SourceRepo, error) {
 	if status != 200 {
 		return nil, fmt.Errorf("抓取 yiove 合集: HTTP %d", status)
 	}
-	return parseYioveCollections(apiBase, []byte(text))
+	repos, err := parseYioveCollections(apiBase, []byte(text))
+	if err != nil {
+		return nil, err
+	}
+	res := &ProviderResult{
+		Key: p.Key, Label: p.Label, Root: p.Root,
+		Repos: repos,
+	}
+	// 全量单源列表元信息（3 万+，分页按需拉取，不一次全量）
+	if meta, err := m.yioveSourceListMeta(apiBase); err == nil && meta != nil {
+		res.SourceList = meta
+	}
+	return res, nil
+}
+
+// yioveSourceListMeta 拉单源列表第一页获取 total/pages（pageSize=100）。
+func (m *Manager) yioveSourceListMeta(apiBase string) (*SourceListMeta, error) {
+	text, status, err := m.fetchText(strings.TrimRight(apiBase, "/")+"/shuyuan/book-sources?page=1&page_size=100", 30*time.Second)
+	if err != nil || status != 200 {
+		return nil, fmt.Errorf("抓取 yiove 书源列表元信息失败: HTTP %d", status)
+	}
+	var resp struct {
+		Total int `json:"total"`
+		Pages int `json:"pages"`
+	}
+	if err := jsonUnmarshalStrict([]byte(text), &resp); err != nil {
+		return nil, fmt.Errorf("解析 yiove 书源列表: %w", err)
+	}
+	if resp.Total <= 0 {
+		return nil, fmt.Errorf("yiove 书源列表为空")
+	}
+	return &SourceListMeta{
+		APIBase: strings.TrimRight(apiBase, "/"),
+		Total:   resp.Total,
+		Pages:   resp.Pages,
+	}, nil
 }
 
 // yioveAPIBase 从站点首页 JS chunk 提取 API base（风险隔离：不写死 API 地址）。
@@ -412,6 +490,122 @@ func parseYioveCollections(apiBase string, data []byte) ([]SourceRepo, error) {
 // jsonUnmarshalStrict 解析 JSON（封装标准库，保持调用点命名一致）。
 func jsonUnmarshalStrict(data []byte, v any) error {
 	return json.Unmarshal(data, v)
+}
+
+// ---------------- yiove 单源列表（分页发现 + 搜索） ----------------
+
+// YioveSourceItem 单源列表条目（元数据，不含规则本体）。
+type YioveSourceItem struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	URL       string `json:"url"` // 书源目标站点
+	IsValid   bool   `json:"isValid"`
+	ViewTotal int    `json:"viewTotal"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
+// YioveSourcePage 单源列表分页结果。
+type YioveSourcePage struct {
+	Items []YioveSourceItem `json:"items"`
+	Page  int               `json:"page"`
+	Pages int               `json:"pages"`
+	Total int               `json:"total"`
+}
+
+// yioveListResponse 站点列表 API 原始结构。
+type yioveListResponse struct {
+	Items []struct {
+		ID         string   `json:"id"`
+		Name       string   `json:"name"`
+		URL        string   `json:"url"`
+		IsValid    bool     `json:"is_valid"`
+		ViewTotal  int      `json:"view_total"`
+		CreateTime float64  `json:"create_time"`
+	} `json:"items"`
+	Page  int `json:"page"`
+	Pages int `json:"pages"`
+	Total int `json:"total"`
+}
+
+// yioveListItemsToItems 通用映射（列表/搜索共用）。
+func yioveListItemsToItems(resp *yioveListResponse) *YioveSourcePage {
+	out := &YioveSourcePage{Page: resp.Page, Pages: resp.Pages, Total: resp.Total, Items: []YioveSourceItem{}}
+	for _, it := range resp.Items {
+		if it.ID == "" {
+			continue
+		}
+		out.Items = append(out.Items, YioveSourceItem{
+			ID: it.ID, Name: it.Name, URL: it.URL,
+			IsValid: it.IsValid, ViewTotal: it.ViewTotal,
+			UpdatedAt: int64(it.CreateTime),
+		})
+	}
+	return out
+}
+
+// YioveSourceList 拉取 yiove 全量单源列表的一页（apiBase 由发现结果给出）。
+func (m *Manager) YioveSourceList(apiBase string, page, pageSize int) (*YioveSourcePage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	text, status, err := m.fetchText(fmt.Sprintf("%s/shuyuan/book-sources?page=%d&page_size=%d", strings.TrimRight(apiBase, "/"), page, pageSize), 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("抓取 yiove 书源列表失败: %w", err)
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("抓取 yiove 书源列表: HTTP %d", status)
+	}
+	var resp yioveListResponse
+	if err := jsonUnmarshalStrict([]byte(text), &resp); err != nil {
+		return nil, fmt.Errorf("解析 yiove 书源列表: %w", err)
+	}
+	return yioveListItemsToItems(&resp), nil
+}
+
+// YioveSearch 搜索 yiove（sourceType: book-sources / book-source-collections）。
+func (m *Manager) YioveSearch(apiBase, keyword, sourceType string, page, pageSize int) (*YioveSourcePage, error) {
+	if sourceType != "book-sources" && sourceType != "book-source-collections" {
+		sourceType = "book-sources"
+	}
+	if keyword == "" {
+		return nil, fmt.Errorf("搜索关键词不能为空")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	url := fmt.Sprintf("%s/shuyuan/search?search_key=%s&search_type=%s&page=%d&page_size=%d",
+		strings.TrimRight(apiBase, "/"), urlQueryEscape(keyword), sourceType, page, pageSize)
+	text, status, err := m.fetchText(url, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("yiove 搜索失败: %w", err)
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("yiove 搜索: HTTP %d", status)
+	}
+	var resp yioveListResponse
+	if err := jsonUnmarshalStrict([]byte(text), &resp); err != nil {
+		return nil, fmt.Errorf("解析 yiove 搜索结果: %w", err)
+	}
+	return yioveListItemsToItems(&resp), nil
+}
+
+// urlQueryEscape 查询参数转义。
+func urlQueryEscape(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(url.PathEscape(s), "+", "%2B"), " ", "%20")
+}
+
+// YioveSourceListImportURL 单源列表页 → 序号段导入直链（如 1-20）。
+// 起止序号 = (page-1)*pageSize+1 至 page*pageSize。
+func YioveSourceListImportURL(apiBase string, page, pageSize int) string {
+	start := (page-1)*pageSize + 1
+	end := page * pageSize
+	return fmt.Sprintf("%s/import/book-sources/%d-%d", strings.TrimRight(apiBase, "/"), start, end)
 }
 
 // DiscoverAllAsync 带上下文的并发发现（预留给将来超时控制）。

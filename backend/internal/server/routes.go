@@ -62,6 +62,9 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sources/sync/{id}", s.handleSyncRepoStatus)
 	mux.HandleFunc("DELETE /api/sources/sync/{id}", s.handleSyncRepoCancel)
 	mux.HandleFunc("GET /api/sources/repos", s.handleRepos)
+	mux.HandleFunc("GET /api/sources/yiove-list", s.handleYioveSourceList)
+	mux.HandleFunc("GET /api/sources/yiove-search", s.handleYioveSearch)
+	mux.HandleFunc("GET /api/sources/yiove-import-url", s.handleYioveImportURL)
 	mux.HandleFunc("GET /api/sources/export", s.handleExportSources)
 	mux.HandleFunc("PATCH /api/sources/{url}", s.handlePatchSource)
 	mux.HandleFunc("DELETE /api/sources/{url}", s.handleDeleteSource)
@@ -267,6 +270,54 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 		s.app.SourceMgr.ClearDiscoveryCache()
 	}
 	writeOK(w, map[string]any{"providers": s.app.SourceMgr.DiscoverAll()})
+}
+
+// handleYioveSourceList yiove 全量单源列表分页（page/pageSize 查询参数）。
+func (s *Server) handleYioveSourceList(w http.ResponseWriter, r *http.Request) {
+	apiBase := r.URL.Query().Get("apiBase")
+	if apiBase == "" || !strings.HasPrefix(apiBase, "http") {
+		writeErr(w, 400, "需要 apiBase 参数（来自书源广场发现结果）")
+		return
+	}
+	res, err := s.app.SourceMgr.YioveSourceList(apiBase, queryInt(r, "page", 1), queryInt(r, "pageSize", 20))
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	writeOK(w, res)
+}
+
+// handleYioveSearch yiove 站内搜索（书源列表/合集两类）。
+func (s *Server) handleYioveSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	apiBase := q.Get("apiBase")
+	if apiBase == "" || !strings.HasPrefix(apiBase, "http") {
+		writeErr(w, 400, "需要 apiBase 参数")
+		return
+	}
+	res, err := s.app.SourceMgr.YioveSearch(apiBase, q.Get("keyword"), q.Get("type"), queryInt(r, "page", 1), queryInt(r, "pageSize", 20))
+	if err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	writeOK(w, res)
+}
+
+// handleYioveImportURL 由页码换算序号段导入直链（前端分页导入用）。
+func (s *Server) handleYioveImportURL(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	apiBase := q.Get("apiBase")
+	if apiBase == "" || !strings.HasPrefix(apiBase, "http") {
+		writeErr(w, 400, "需要 apiBase 参数")
+		return
+	}
+	page := queryInt(r, "page", 1)
+	pageSize := queryInt(r, "pageSize", 20)
+	if pageSize < 1 || pageSize > 100 {
+		writeErr(w, 400, "pageSize 超出范围（1-100）")
+		return
+	}
+	writeOK(w, map[string]any{"url": source.YioveSourceListImportURL(apiBase, page, pageSize)})
 }
 
 func (s *Server) handleExportSources(w http.ResponseWriter, r *http.Request) {

@@ -57,6 +57,36 @@ func TestParseSourceJSON(t *testing.T) {
 	}
 }
 
+// TestParseSourceJSON_LaxTypes yiove 等站点导出的 JSON 数字/字符串类型混用（实测
+// lastUpdateTime 为字符串、concurrentRate 为数字），宽容解析不应失败。
+func TestParseSourceJSON_LaxTypes(t *testing.T) {
+	lax := `[
+		{"bookSourceUrl":"https://l1.com","bookSourceName":"字符串时间","lastUpdateTime":"1794487793152","respondTime":"180000","weight":"0","customOrder":"0"},
+		{"bookSourceUrl":"https://l2.com","bookSourceName":"数字并发率","concurrentRate":1000,"header":123}
+	]`
+	list, err := ParseSourceJSON([]byte(lax))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("lax sources = %d want 2", len(list))
+	}
+	if list[0].LastUpdateTime != 1794487793152 {
+		t.Errorf("lastUpdateTime 归一化失败: %d", list[0].LastUpdateTime)
+	}
+	if list[1].ConcurrentRate != "1000" {
+		t.Errorf("concurrentRate 归一化失败: %q", list[1].ConcurrentRate)
+	}
+	if list[1].Header != "123" {
+		t.Errorf("header 归一化失败: %q", list[1].Header)
+	}
+	// 正常 JSON 不受归一化影响
+	normal, err := ParseSourceJSON([]byte(sampleSources))
+	if err != nil || len(normal) != 2 {
+		t.Fatalf("normal 解析被破坏: %v %d", err, len(normal))
+	}
+}
+
 func TestImportDedup(t *testing.T) {
 	m, st := testManager(t)
 	res, err := m.ImportText(sampleSources, "测试导入")

@@ -115,12 +115,17 @@ func TestDiscoverYiove(t *testing.T) {
 	apiBase = srv.URL
 
 	m, _ := testManager(t)
-	repos, err := m.DiscoverRepos(RepoProvider{Key: "yiove", Root: srv.URL})
+	res, err := m.DiscoverProvider(RepoProvider{Key: "yiove", Root: srv.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
+	repos := res.Repos
 	if len(repos) != 2 {
 		t.Fatalf("应提取 2 条有效合集，实际 %d", len(repos))
+	}
+	// 单源列表元信息（测试站未实现该 API → SourceList 应为 nil，不阻塞合集发现）
+	if res.SourceList != nil {
+		t.Errorf("无列表 API 时 SourceList 应为 nil")
 	}
 	first := repos[0]
 	if first.Name != "精品书源合集" {
@@ -137,9 +142,9 @@ func TestDiscoverYiove(t *testing.T) {
 		t.Errorf("note fallback = %q", repos[1].Note)
 	}
 	// 第二次调用应命中缓存（不再请求站点：用计数服务器验证）
-	repos2, err := m.DiscoverRepos(RepoProvider{Key: "yiove", Root: srv.URL})
-	if err != nil || len(repos2) != 2 {
-		t.Fatalf("缓存命中失败: %v %d", err, len(repos2))
+	res2, err := m.DiscoverProvider(RepoProvider{Key: "yiove", Root: srv.URL})
+	if err != nil || len(res2.Repos) != 2 {
+		t.Fatalf("缓存命中失败: %v %d", err, len(res2.Repos))
 	}
 }
 
@@ -158,6 +163,76 @@ func TestYioveAPIBaseFallback(t *testing.T) {
 	// 127.0.0.1:port 无 "." 分隔的域名段（第一个 . 在端口前的 IP 里）——只要不 panic 且返回非空即认为回退逻辑工作
 	if base == "" {
 		t.Fatal("回退结果不应为空")
+	}
+}
+
+func TestYioveSourceListAndSearch(t *testing.T) {
+	listJSON := `{"items":[
+		{"id":"s1","name":"笔趣阁","url":"https://a.com","is_valid":true,"view_total":100,"create_time":1790000000},
+		{"id":"","name":"无效应跳过"},
+		{"id":"s2","name":"笔趣阁2","url":"https://b.com","is_valid":false,"view_total":5}
+	],"page":2,"pages":10,"total":200}`
+	searchJSON := `{"items":[
+		{"id":"c1","name":"精品书源合集","total":11,"create_time":1790000000}
+	],"page":1,"pages":1,"total":1}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /shuyuan/book-sources", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") != "2" {
+			t.Errorf("page 参数错误: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(listJSON))
+	})
+	mux.HandleFunc("GET /shuyuan/search", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("search_type") != "book-source-collections" {
+			t.Errorf("search_type 错误: %s", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(searchJSON))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	m, _ := testManager(t)
+
+	// 分页列表
+	page, err := m.YioveSourceList(srv.URL, 2, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 200 || page.Pages != 10 || len(page.Items) != 2 {
+		t.Fatalf("分页字段错误: %+v", page)
+	}
+	if page.Items[0].ID != "s1" || !page.Items[0].IsValid || page.Items[0].ViewTotal != 100 {
+		t.Errorf("条目映射错误: %+v", page.Items[0])
+	}
+	if page.Items[1].IsValid {
+		t.Error("is_valid=false 应原样保留")
+	}
+
+	// 搜索（合集类型）
+	res, err := m.YioveSearch(srv.URL, "精品", "book-source-collections", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 1 || res.Items[0].Name != "精品书源合集" {
+		t.Fatalf("搜索结果错误: %+v", res)
+	}
+
+	// 空关键词应拒绝
+	if _, err := m.YioveSearch(srv.URL, "", "book-sources", 1, 20); err == nil {
+		t.Error("空关键词应报错")
+	}
+}
+
+func TestYioveSourceListImportURL(t *testing.T) {
+	cases := []struct{ page, size int; want string }{
+		{1, 20, "https://api.test/import/book-sources/1-20"},
+		{2, 20, "https://api.test/import/book-sources/21-40"},
+		{3, 50, "https://api.test/import/book-sources/101-150"},
+	}
+	for _, c := range cases {
+		got := YioveSourceListImportURL("https://api.test", c.page, c.size)
+		if got != c.want {
+			t.Errorf("page=%d size=%d: got %q want %q", c.page, c.size, got, c.want)
+		}
 	}
 }
 
