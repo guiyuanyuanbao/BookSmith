@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
-import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type RepoProviderResult, type RepoSyncProgress, type ImportResult, type YioveSourcePage } from '@/api'
+import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type RepoProviderResult, type RepoSyncProgress, type ImportResult, type YioveSourcePage, type YioveSourceItem } from '@/api'
 
 const items = ref<BookSource[]>([])
 const total = ref(0)
@@ -101,6 +101,55 @@ async function importYiovePage(page: number) {
   } catch (e: any) {
     ElMessage.error(e.message)
   }
+}
+
+/** 导入单个 yiove 书源（/import/book-source/{id} → 单元素数组） */
+async function importYioveOne(item: YioveSourceItem) {
+  const meta = yioveProvider.value?.sourceList
+  if (!meta) return
+  try {
+    const url = `${meta.apiBase}/import/book-source/${item.id}`
+    await syncRepo(
+      { name: `Yiove·${item.name}`, url, kind: 'bookSource', provider: 'yiove' },
+      false,
+    )
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  }
+}
+
+/** 批量导入选中的 yiove 单源（顺序逐个起同步任务） */
+const selectedYioveSources = ref<YioveSourceItem[]>([])
+
+async function importSelectedYioveSources() {
+  const list = selectedYioveSources.value
+  if (!list.length) return
+  const meta = yioveProvider.value?.sourceList
+  if (!meta) return
+  for (const item of list) {
+    try {
+      await api.syncRepoStart({
+        url: `${meta.apiBase}/import/book-source/${item.id}`,
+        name: `Yiove·${item.name}`,
+        kind: 'bookSource',
+      })
+    } catch (e: any) {
+      ElMessage.error(`${item.name}: ${e.message}`)
+      continue
+    }
+    // 等当前任务完成再继续
+    await new Promise<void>((resolve) => {
+      const t = setInterval(() => {
+        if (!syncJob.value?.progress.running) {
+          clearInterval(t)
+          resolve()
+        }
+      }, 500)
+    })
+  }
+  ElMessage.success(`已批量导入 ${list.length} 个书源`)
+  selectedYioveSources.value = []
+  load()
 }
 
 /** 导入搜索结果页（用当前列表页序号段不行——搜索结果是过滤后的，直接拉同一页号不精确）
@@ -593,21 +642,42 @@ onMounted(load)
                     导入本页（序号段直链）
                   </el-button>
                 </div>
-                <el-table v-loading="yioveListLoading" :data="yioveListData?.items ?? []" max-height="320" size="small">
-                  <el-table-column prop="name" label="书源" min-width="170" show-overflow-tooltip />
-                  <el-table-column prop="url" label="站点" min-width="150" show-overflow-tooltip />
-                  <el-table-column label="状态" width="70">
+                <el-table
+                  v-loading="yioveListLoading"
+                  :data="yioveListData?.items ?? []"
+                  max-height="320" size="small"
+                  @selection-change="(rows: YioveSourceItem[]) => selectedYioveSources = rows"
+                >
+                  <el-table-column type="selection" width="42" />
+                  <el-table-column prop="name" label="书源" min-width="150" show-overflow-tooltip />
+                  <el-table-column prop="url" label="站点" min-width="130" show-overflow-tooltip />
+                  <el-table-column label="状态" width="62">
                     <template #default="{ row }">
                       <el-tag :type="row.isValid ? 'success' : 'info'" size="small">{{ row.isValid ? '有效' : '未知' }}</el-tag>
                     </template>
                   </el-table-column>
-                  <el-table-column label="热度" width="70">
+                  <el-table-column label="热度" width="58">
                     <template #default="{ row }">{{ row.viewTotal }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="76">
+                    <template #default="{ row }">
+                      <el-button
+                        size="small" type="primary" plain
+                        :disabled="!!syncJob?.progress.running"
+                        @click="importYioveOne(row)"
+                      >导入</el-button>
+                    </template>
                   </el-table-column>
                 </el-table>
                 <div style="display: flex; justify-content: space-between; margin-top: 8px; align-items: center">
+                  <el-button
+                    v-if="selectedYioveSources.length"
+                    size="small" type="primary" plain
+                    :disabled="!!syncJob?.progress.running"
+                    @click="importSelectedYioveSources"
+                  >批量导入选中 ({{ selectedYioveSources.length }})</el-button>
                   <span class="muted" style="font-size: 12px">
-                    第 {{ yioveListData?.page ?? 1 }} / {{ yioveListData?.pages ?? 1 }} 页 · 共 {{ yioveListData?.total ?? 0 }} 源（每页 20）
+                    第 {{ yioveListData?.page ?? 1 }} / {{ yioveListData?.pages ?? 1 }} 页 · 共 {{ yioveListData?.total ?? 0 }} 源（每页 20）· 可勾选批量导入
                   </span>
                   <el-pagination
                     layout="prev, pager, next"
