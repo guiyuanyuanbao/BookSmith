@@ -38,11 +38,19 @@ type App struct {
 	// 书源广场异步同步任务
 	RepoSyncJobs map[string]*source.SyncJob
 	RepoSyncMu   sync.Mutex
-	CoverClient  *http.Client
-	// 封面 LRU：mem 为内存热缓存（256 条），disk 为磁盘 covers 目录索引
-	// （上限 5000 个文件/500MB，超限驱逐最冷文件，防止缓存无限增长）
+	// 发现页异步聚合任务
+	ExploreJobs map[string]*ExploreJob
+	ExploreMu   sync.Mutex
+	CoverClient *http.Client
+	// 封面 LRU：mem 为内存热缓存（1024 条），disk 为磁盘 covers 目录索引
+	// （上限 20000 个文件/1GB，超限驱逐最冷文件，防止缓存无限增长）
 	CoverMemLRU  *CoverLRU
 	CoverDiskLRU *CoverLRU
+	// coverFetchSem 远程封面抓取全局并发信号量（发现页一屏 40+ 未知 URL 并发，防打挂源站）
+	coverFetchSem chan struct{}
+	// coverInflight 同 URL 抓取去重：并发 miss 只抓一次，其余等待共享结果
+	coverInflightMu sync.Mutex
+	coverInflight   map[string]*coverInflightEntry
 }
 
 // FindEnabledSources 启用书源列表（webbook.Search 输入）。
@@ -57,6 +65,12 @@ func (s *Server) Routes(mux *http.ServeMux) {
 
 	// 书源
 	mux.HandleFunc("GET /api/sources", s.handleListSources)
+	mux.HandleFunc("GET /api/sources/groups", s.handleSourceGroups)
+	// 发现页
+	mux.HandleFunc("GET /api/explore/sources", s.handleExploreSources)
+	mux.HandleFunc("POST /api/explore", s.handleExploreStart)
+	mux.HandleFunc("GET /api/explore/{id}", s.handleExploreGet)
+	mux.HandleFunc("DELETE /api/explore/{id}", s.handleExploreCancel)
 	mux.HandleFunc("POST /api/sources/import", s.handleImportSources)
 	mux.HandleFunc("POST /api/sources/sync", s.handleSyncRepo)
 	mux.HandleFunc("GET /api/sources/sync/{id}", s.handleSyncRepoStatus)
@@ -158,14 +172,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
 	keyword := r.URL.Query().Get("keyword")
 	enabled := queryInt(r, "enabled", -1)
+	group := r.URL.Query().Get("group")
 	limit := queryInt(r, "limit", 50)
 	offset := queryInt(r, "offset", 0)
-	items, total, err := s.app.Store.ListSources(keyword, enabled, limit, offset)
+	items, total, err := s.app.Store.ListSources(keyword, enabled, group, limit, offset)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
 	writeOK(w, map[string]any{"items": items, "total": total})
+}
+
+// handleSourceGroups 全部分组名（前端筛选下拉）。
+func (s *Server) handleSourceGroups(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.app.Store.SourceGroups()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeOK(w, map[string]any{"groups": groups})
 }
 
 func (s *Server) handleImportSources(w http.ResponseWriter, r *http.Request) {

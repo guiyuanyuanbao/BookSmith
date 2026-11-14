@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, VideoPause, CircleCheckFilled } from '@element-plus/icons-vue'
-import { api, coverProxy, subscribeEvents, type SearchJobState, type SearchOrigin, type SearchResult, type TocProbeResult } from '@/api'
+import { api, coverProxy, subscribeEvents, type BookSource, type SearchJobState, type SearchOrigin, type SearchResult, type TocProbeResult } from '@/api'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 
@@ -22,6 +22,67 @@ const job = ref<SearchJobState | null>(null)
 let searchId = ''
 let pollTimer: number | null = null
 let closeSSE: (() => void) | null = null
+
+// ---------- 搜索范围：指定/屏蔽源与分组 ----------
+const scopeMode = ref<'all' | 'include' | 'exclude'>('all')
+const scopePanel = ref(false)
+const scopeSelectedGroups = ref<string[]>([])
+const scopeSelectedSources = ref<string[]>([])
+const allEnabledSources = ref<BookSource[]>([])
+const scopeLoading = ref(false)
+
+/** 展开选中的分组为该分组内全部启用源 URL */
+function expandGroups(): string[] {
+  const out: string[] = []
+  for (const bs of allEnabledSources.value) {
+    const groups = (bs.bookSourceGroup || '').split(',').map((s) => s.trim())
+    if (groups.some((g) => scopeSelectedGroups.value.includes(g))) {
+      out.push(bs.bookSourceUrl)
+    }
+  }
+  return out
+}
+
+const scopeSourceUrls = computed(() => {
+  if (scopeMode.value !== 'include') return undefined
+  return [...new Set([...scopeSelectedSources.value, ...expandGroups()])]
+})
+
+const scopeExcludeUrls = computed(() => {
+  if (scopeMode.value !== 'exclude') return undefined
+  return [...new Set([...scopeSelectedSources.value, ...expandGroups()])]
+})
+
+const scopeActive = computed(() => scopeMode.value !== 'all' && (scopeSelectedSources.value.length > 0 || scopeSelectedGroups.value.length > 0))
+
+async function loadScopeSources() {
+  if (allEnabledSources.value.length) return
+  scopeLoading.value = true
+  try {
+    const r = await api.listSources({ enabled: 1, limit: 2000 })
+    allEnabledSources.value = r.items ?? []
+  } catch { /* 面板里提示重试 */ } finally {
+    scopeLoading.value = false
+  }
+}
+
+function openScopePanel() {
+  scopePanel.value = !scopePanel.value
+  if (scopePanel.value) loadScopeSources()
+}
+
+function clearScope() {
+  scopeMode.value = 'all'
+  scopeSelectedGroups.value = []
+  scopeSelectedSources.value = []
+}
+
+/** 来源标签 tooltip：显示源分组，方便识别来源质量 */
+function originGroupLabel(o: SearchOrigin): string {
+  const bs = allEnabledSources.value.find((s) => s.bookSourceUrl === o.sourceUrl)
+  const g = bs?.bookSourceGroup || ''
+  return g ? `${o.sourceName} · ${g}` : o.sourceName
+}
 
 async function poll() {
   if (!searchId) return
@@ -99,7 +160,7 @@ async function doSearch() {
     },
   })
   try {
-    const r = await api.searchStart(key)
+    const r = await api.searchStart(key, scopeSourceUrls.value, scopeExcludeUrls.value)
     searchId = r.searchId
     api.addSearchHistory(key).then(() => loadHistory()).catch(() => {})
     startPolling()
@@ -457,6 +518,37 @@ onBeforeUnmount(() => {
             </template>
           </el-input>
         </div>
+        <div class="hero-scope">
+          <el-button size="small" :type="scopeActive ? 'primary' : 'default'" plain @click="openScopePanel">
+            搜索范围{{ scopeActive ? `（${scopeMode === 'include' ? '仅用' : '屏蔽'} ${scopeSelectedSources.length + scopeSelectedGroups.length} 项）` : '：全部源' }}
+          </el-button>
+          <el-button v-if="scopeActive" size="small" text @click="clearScope">重置</el-button>
+        </div>
+        <!-- 范围选择面板 -->
+        <div v-if="scopePanel" class="scope-panel">
+          <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 10px">
+            <el-radio-group v-model="scopeMode" size="small">
+              <el-radio-button value="all">全部源</el-radio-button>
+              <el-radio-button value="include">只用选中的</el-radio-button>
+              <el-radio-button value="exclude">屏蔽选中的</el-radio-button>
+            </el-radio-group>
+            <span class="muted" style="font-size: 12px">
+              {{ scopeMode === 'include' ? '只搜索勾选的分组/源' : scopeMode === 'exclude' ? '搜索时跳过勾选的分组/源' : '全部启用源参与搜索' }}
+            </span>
+            <div class="spacer" />
+            <el-button size="small" text @click="scopePanel = false">收起</el-button>
+          </div>
+          <div v-loading="scopeLoading">
+            <div style="font-size: 13px; font-weight: 600; margin: 6px 0">按分组</div>
+            <el-select v-model="scopeSelectedGroups" multiple filterable clearable placeholder="选择分组（可多选）" style="width: 100%">
+              <el-option v-for="g in [...new Set(allEnabledSources.flatMap((s) => (s.bookSourceGroup || '').split(',').map((x) => x.trim())).filter(Boolean))].sort()" :key="g" :value="g" :label="g" />
+            </el-select>
+            <div style="font-size: 13px; font-weight: 600; margin: 10px 0 6px">按书源</div>
+            <el-select v-model="scopeSelectedSources" multiple filterable clearable placeholder="选择书源（可多选）" style="width: 100%">
+              <el-option v-for="s in allEnabledSources" :key="s.bookSourceUrl" :value="s.bookSourceUrl" :label="`${s.bookSourceName}（${(s.bookSourceGroup || '').split(',')[0] || '无分组'}）`" />
+            </el-select>
+          </div>
+        </div>
         <div class="hero-hints">
           <template v-if="history.length">
             <span class="muted">最近：</span>
@@ -488,7 +580,36 @@ onBeforeUnmount(() => {
         </template>
       </el-input>
       <el-button v-if="loading" :icon="VideoPause" @click="cancelSearch">取消</el-button>
+      <el-button size="small" :type="scopeActive ? 'primary' : 'default'" plain @click="openScopePanel">
+        搜索范围{{ scopeActive ? `（${scopeMode === 'include' ? '仅用' : '屏蔽'} ${scopeSelectedSources.length + scopeSelectedGroups.length} 项）` : '：全部源' }}
+      </el-button>
+      <el-button v-if="scopeActive" size="small" text @click="clearScope">重置</el-button>
       <div class="spacer" />
+      <!-- 结果页范围面板（与 hero 共用状态） -->
+      <div v-if="scopePanel" class="scope-panel" style="flex-basis: 100%">
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 10px">
+          <el-radio-group v-model="scopeMode" size="small">
+            <el-radio-button value="all">全部源</el-radio-button>
+            <el-radio-button value="include">只用选中的</el-radio-button>
+            <el-radio-button value="exclude">屏蔽选中的</el-radio-button>
+          </el-radio-group>
+          <span class="muted" style="font-size: 12px">
+            {{ scopeMode === 'include' ? '只搜索勾选的分组/源' : scopeMode === 'exclude' ? '搜索时跳过勾选的分组/源' : '全部启用源参与搜索' }}
+          </span>
+          <div class="spacer" />
+          <el-button size="small" text @click="scopePanel = false">收起</el-button>
+        </div>
+        <div v-loading="scopeLoading">
+          <div style="font-size: 13px; font-weight: 600; margin: 6px 0">按分组</div>
+          <el-select v-model="scopeSelectedGroups" multiple filterable clearable placeholder="选择分组（可多选）" style="width: 100%">
+            <el-option v-for="g in [...new Set(allEnabledSources.flatMap((s) => (s.bookSourceGroup || '').split(',').map((x) => x.trim())).filter(Boolean))].sort()" :key="g" :value="g" :label="g" />
+          </el-select>
+          <div style="font-size: 13px; font-weight: 600; margin: 10px 0 6px">按书源</div>
+          <el-select v-model="scopeSelectedSources" multiple filterable clearable placeholder="选择书源（可多选）" style="width: 100%">
+            <el-option v-for="s in allEnabledSources" :key="s.bookSourceUrl" :value="s.bookSourceUrl" :label="`${s.bookSourceName}（${(s.bookSourceGroup || '').split(',')[0] || '无分组'}）`" />
+          </el-select>
+        </div>
+      </div>
       <template v-if="job">
         <el-progress
           type="dashboard"
@@ -544,15 +665,16 @@ onBeforeUnmount(() => {
         </div>
         <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
           <span class="muted">{{ item.origins.length }} 个来源：</span>
-          <el-tag
+          <el-tooltip
             v-for="o in item.origins.slice(0, 6)"
             :key="o.sourceUrl"
-            size="small"
-            class="origin-tag"
-            @click="openPick(item)"
+            :content="originGroupLabel(o)"
+            placement="top"
           >
-            {{ o.sourceName }}
-          </el-tag>
+            <el-tag size="small" class="origin-tag" @click="openPick(item)">
+              {{ o.sourceName }}
+            </el-tag>
+          </el-tooltip>
           <el-tag v-if="item.origins.length > 6" size="small" type="info">
             +{{ item.origins.length - 6 }}
           </el-tag>
@@ -768,7 +890,17 @@ onBeforeUnmount(() => {
   font-size: 15px;
   margin: 0 0 32px;
 }
-.hero-search { margin-bottom: 16px; }
+.hero-search { margin-bottom: 12px; }
+.hero-scope { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
+.scope-panel {
+  background: var(--bs-card, #fff);
+  border: 1px solid var(--bs-border, #e5e7eb);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  width: 100%;
+  max-width: 640px;
+}
 .pick-section-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
 /* 固定占位高度：历史异步载入不引起布局跳动 */
 .hero-hints {

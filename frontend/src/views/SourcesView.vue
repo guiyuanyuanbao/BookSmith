@@ -10,6 +10,8 @@ const page = ref(1)
 const pageSize = 20
 const keyword = ref('')
 const enabledFilter = ref(-1)
+const groupFilter = ref('')
+const groups = ref<string[]>([])
 const loading = ref(false)
 
 const importDlg = ref(false)
@@ -291,6 +293,7 @@ async function load() {
     const r = await api.listSources({
       keyword: keyword.value || undefined,
       enabled: enabledFilter.value,
+      group: groupFilter.value || undefined,
       limit: pageSize,
       offset: (page.value - 1) * pageSize,
     })
@@ -301,6 +304,26 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+/** 全部分组（拆分聚合，筛选下拉数据源） */
+async function loadGroups() {
+  try {
+    const r = await api.sourceGroups()
+    groups.value = r.groups ?? []
+  } catch { /* 下拉失败不影响主列表 */ }
+}
+
+/** 点击分组标签 → 按该分组筛选 */
+function filterByGroup(g: string) {
+  groupFilter.value = g
+  page.value = 1
+  load()
+}
+
+/** 拆分逗号分隔多分组串 */
+function splitGroups(g: string): string[] {
+  return (g || '').split(',').map((s) => s.trim()).filter(Boolean)
 }
 
 async function toggle(bs: BookSource) {
@@ -488,7 +511,10 @@ function fmtMs(ms?: number) {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadGroups()
+})
 </script>
 
 <template>
@@ -498,6 +524,9 @@ onMounted(load)
 
     <div class="toolbar">
       <el-input v-model="keyword" placeholder="搜索名称/分组" style="width: 220px" clearable @input="page = 1; load()" />
+      <el-select v-model="groupFilter" placeholder="全部分组" style="width: 170px" clearable filterable @change="page = 1; load()">
+        <el-option v-for="g in groups" :key="g" :value="g" :label="g" />
+      </el-select>
       <el-select v-model="enabledFilter" style="width: 120px" @change="page = 1; load()">
         <el-option :value="-1" label="全部状态" />
         <el-option :value="1" label="已启用" />
@@ -536,7 +565,23 @@ onMounted(load)
           <el-tag v-if="row.custom" size="small" style="margin-left: 6px">自定义</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="bookSourceGroup" label="分组" min-width="110" show-overflow-tooltip />
+      <el-table-column label="分组" min-width="130">
+        <template #default="{ row }">
+          <span v-if="!row.bookSourceGroup" class="muted">—</span>
+          <span v-else style="display: inline-flex; gap: 4px; flex-wrap: wrap">
+            <el-tag
+              v-for="(g, i) in splitGroups(row.bookSourceGroup).slice(0, 3)"
+              :key="g" size="small"
+              :type="groupFilter === g ? 'primary' : 'info'"
+              style="cursor: pointer"
+              @click="filterByGroup(g)"
+            >{{ g }}</el-tag>
+            <el-tooltip v-if="splitGroups(row.bookSourceGroup).length > 3" :content="splitGroups(row.bookSourceGroup).slice(3).join('、')" placement="top">
+              <el-tag size="small" type="info">+{{ splitGroups(row.bookSourceGroup).length - 3 }}</el-tag>
+            </el-tooltip>
+          </span>
+        </template>
+      </el-table-column>
       <el-table-column label="健康" width="110">
         <template #default="{ row }">
           <el-tag v-if="row.verified" size="small" type="success">可用 {{ fmtMs(row.respondTime) }}</el-tag>

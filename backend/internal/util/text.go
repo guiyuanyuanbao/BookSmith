@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // 不可见字符（借鉴 so-novel 的乱码根因分析）：控制字符、格式控制符、私有区 PUA、行/段分隔符、零宽字符。
@@ -42,6 +43,8 @@ var winReserved = map[string]bool{
 var invalidNameChars = regexp.MustCompile(`[\\/:*?"<>|\x00-\x1f]`)
 
 // SanitizeFileName 清理文件名：移除 Windows 非法字符、保留字、首尾空白与点。
+// 截断按 UTF-8 字节（ext4 NAME_MAX=255 字节；留余量取 240）——中文每字 3 字节，
+// 按 rune 截断会让纯中文长名超限导致 mkdir ENAMETOOLONG。
 func SanitizeFileName(name string) string {
 	name = invalidNameChars.ReplaceAllString(name, "")
 	name = strings.TrimSpace(name)
@@ -49,14 +52,29 @@ func SanitizeFileName(name string) string {
 	if name == "" || winReserved[strings.ToUpper(name)] {
 		return "_"
 	}
-	// 限制长度，避免路径超长
-	const maxLen = 100
-	r := []rune(name)
-	if len(r) > maxLen {
-		name = string(r[:maxLen])
+	// 按 UTF-8 字节截断（留余量 maxNameBytes=240 < 255）
+	var b strings.Builder
+	size := 0
+	for _, r := range name {
+		n := utf8.RuneLen(r)
+		if n < 0 {
+			n = 3 // 非法 rune 兜底
+		}
+		if size+n > maxNameBytes {
+			break
+		}
+		b.WriteRune(r)
+		size += n
 	}
-	return name
+	out := b.String()
+	if out == "" {
+		return "_"
+	}
+	return out
 }
+
+// maxNameBytes 文件名单段字节上限（< ext4 NAME_MAX 255，留余量）。
+const maxNameBytes = 240
 
 // SafeBookFileName 生成 "书名(作者)" 形式的安全文件主名。
 func SafeBookFileName(name, author string) string {

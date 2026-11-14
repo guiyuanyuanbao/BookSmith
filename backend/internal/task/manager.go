@@ -327,7 +327,9 @@ func (m *Manager) fetchToc(t *model.DownloadTask, book *model.Book, bs *model.Bo
 		if book.Name == "" {
 			book.Name = info.Name
 		}
-		if info.Author != "" {
+		// 作者防御：书源详情规则可能抓错元素（如简介正文），几百字脏值会覆盖正确作者
+		// 并撑爆导出目录名（mkdir ENAMETOOLONG）。非空且不超合理长度才覆盖。
+		if info.Author != "" && len([]rune(info.Author)) <= 50 {
 			book.Author = info.Author
 		}
 		if info.Intro != "" {
@@ -644,14 +646,16 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 			return "", fmt.Errorf("%s 导出失败: %w", f, err)
 		}
 		// 目录管理：downloads/{书名(作者)}/{源名}/{书名(作者)}.ext
-		// 文件名不含源名（来源在目录层级中），同书同源重导出覆盖旧文件
-		bookDir := util.SanitizeFileName(book.Name + "(" + book.Author + ")")
+		// 文件名不含源名（来源在目录层级中），同书同源重导出覆盖旧文件。
+		// SafeBookFileName：书名/作者各自字节截断（防脏长作者撑爆目录名，ext4 NAME_MAX=255）。
+		bookBase := util.SafeBookFileName(book.Name, book.Author)
+		bookDir := bookBase
 		srcDir := util.SanitizeFileName(book.OriginName)
 		dir := filepath.Join(m.outDir, bookDir, srcDir)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
-		name := util.SanitizeFileName(book.Name + "(" + book.Author + ")." + exp.Ext())
+		name := bookBase + "." + exp.Ext() // 扩展名不参与截断
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 			return "", err

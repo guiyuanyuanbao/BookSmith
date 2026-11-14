@@ -12,11 +12,15 @@ import (
 )
 
 // coverCacheLimits 磁盘缓存上限（任一超限即驱逐）。
+// 容量按"书架 + 搜索 + 发现页浏览"混合场景设计：发现页一屏 40+ 封面，
+// 小容量会被浏览冲刷掉书架热封面。
 const (
-	coverMaxEntries = 5000
-	coverMaxBytes   = 500 << 20 // 500MB
+	coverMaxEntries = 20000
+	coverMaxBytes   = 1 << 30 // 1GB
 	// memCoverMax 内存热缓存条目上限
-	memCoverMax = 256
+	memCoverMax = 1024
+	// coverFetchConcurrency 远程抓取全局并发上限（防未知质量 URL 一屏并发打挂源站）
+	coverFetchConcurrency = 8
 )
 
 // lruEntry 驱逐队列元素（key 即缓存键：内存层为 rawURL，磁盘层为 hash 文件名）。

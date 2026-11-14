@@ -74,7 +74,7 @@ func (j *SearchJob) finish(agg *webbook.Aggregated) {
 }
 
 // startSearch 启动搜索任务（同 key 进行中则复用，legado 语义）。
-func (s *Server) startSearch(key string, sourceURLs []string) (*SearchJob, error) {
+func (s *Server) startSearch(key string, sourceURLs []string, excludeURLs []string) (*SearchJob, error) {
 	s.app.SearchMu.Lock()
 	defer s.app.SearchMu.Unlock()
 
@@ -92,6 +92,7 @@ func (s *Server) startSearch(key string, sourceURLs []string) (*SearchJob, error
 	if err != nil {
 		return nil, err
 	}
+	// 白名单：指定源/分组展开后的 URL（交集语义，只能从启用源中选）
 	if len(sourceURLs) > 0 {
 		allow := map[string]bool{}
 		for _, u := range sourceURLs {
@@ -100,6 +101,20 @@ func (s *Server) startSearch(key string, sourceURLs []string) (*SearchJob, error
 		filtered := make([]*model.BookSource, 0, len(sources))
 		for _, bs := range sources {
 			if allow[bs.BookSourceURL] {
+				filtered = append(filtered, bs)
+			}
+		}
+		sources = filtered
+	}
+	// 黑名单：屏蔽源/分组（在白名单之后应用，优先级更高）
+	if len(excludeURLs) > 0 {
+		deny := map[string]bool{}
+		for _, u := range excludeURLs {
+			deny[u] = true
+		}
+		filtered := make([]*model.BookSource, 0, len(sources))
+		for _, bs := range sources {
+			if !deny[bs.BookSourceURL] {
 				filtered = append(filtered, bs)
 			}
 		}
@@ -157,8 +172,9 @@ func (s *Server) startSearch(key string, sourceURLs []string) (*SearchJob, error
 
 func (s *Server) handleSearchStart(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Key        string   `json:"key"`
-		SourceURLs []string `json:"sourceUrls"`
+		Key         string   `json:"key"`
+		SourceURLs  []string `json:"sourceUrls"`  // 白名单：只用这些源（分组展开）
+		ExcludeURLs []string `json:"excludeUrls"` // 黑名单：屏蔽这些源（优先于白名单）
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, 400, err.Error())
@@ -168,7 +184,7 @@ func (s *Server) handleSearchStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "key 不能为空")
 		return
 	}
-	job, err := s.startSearch(req.Key, req.SourceURLs)
+	job, err := s.startSearch(req.Key, req.SourceURLs, req.ExcludeURLs)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
@@ -209,7 +225,8 @@ type coverCacheEntry struct {
 }
 
 // StartCoverProxy 初始化封面代理缓存与客户端。
-// 内存热缓存 256 条 LRU；磁盘 covers 目录建索引（5000 个/500MB 上限，超限驱逐最冷文件）。
+// 内存热缓存 1024 条 LRU；磁盘 covers 目录建索引（20000 个/1GB 上限，超限驱逐最冷文件）。
+// 抓取路径带全局并发信号量（8）与同 URL in-flight 去重——发现页一屏并发加载的场景。
 func (s *App) StartCoverProxy() {
 	s.CoverClient = &http.Client{
 		Timeout: 8 * time.Second,
@@ -224,6 +241,8 @@ func (s *App) StartCoverProxy() {
 	scanCoversDir(coversDir, diskLRU)
 	s.CoverDiskLRU = diskLRU
 	s.CoverMemLRU = NewCoverLRU(memCoverMax, 0, nil) // 内存层仅条目数上限
+	s.coverFetchSem = make(chan struct{}, coverFetchConcurrency)
+	s.coverInflight = map[string]*coverInflightEntry{}
 }
 
 // coverCacheLookup 三层读取：内存 LRU → 磁盘（+LRU 索引提温）→ 未命中。
@@ -267,8 +286,8 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(d)
 		return
 	}
-	// 第3层：远程抓取并写两级缓存
-	data, ct, ok := s.fetchAndCacheCover(rawURL)
+	// 第3层：远程抓取（全局信号量 + 同 URL in-flight 去重），成功写两级缓存
+	data, ct, ok := s.app.fetchCoverDeduped(rawURL)
 	if !ok {
 		writeErr(w, 502, "封面获取失败（源站暂时不可用，稍后重试或换源）")
 		return
@@ -276,6 +295,47 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(data)
+}
+
+// coverInflightEntry 一次进行中的封面抓取（等待者共享结果）。
+type coverInflightEntry struct {
+	done chan struct{}
+	data []byte
+	mime string
+	ok   bool
+}
+
+// fetchCoverDeduped 同 URL 并发 miss 只抓一次：首个请求者持锁抓取（受全局信号量约束），
+// 其余等待其完成并共享结果。缓存已命中则直接返回（不进入去重通道）。
+func (a *App) fetchCoverDeduped(rawURL string) ([]byte, string, bool) {
+	a.coverInflightMu.Lock()
+	if e, ok := a.coverInflight[rawURL]; ok {
+		a.coverInflightMu.Unlock()
+		<-e.done // 等待首个抓取完成
+		return e.data, e.mime, e.ok
+	}
+	e := &coverInflightEntry{done: make(chan struct{})}
+	a.coverInflight[rawURL] = e
+	a.coverInflightMu.Unlock()
+
+	// 首个请求者：抓取（信号量限流）
+	defer func() {
+		a.coverInflightMu.Lock()
+		delete(a.coverInflight, rawURL)
+		a.coverInflightMu.Unlock()
+		close(e.done)
+	}()
+	a.coverFetchSem <- struct{}{}
+	defer func() { <-a.coverFetchSem }()
+
+	// 抓取前再查一次缓存（等待期间可能已被先行者写入）
+	if d, m, ok := a.coverCacheLookup(rawURL); ok {
+		e.data, e.mime, e.ok = d, m, true
+		return d, m, true
+	}
+	data, ct, ok := a.fetchAndCacheCoverDirect(rawURL)
+	e.data, e.mime, e.ok = data, ct, ok
+	return data, ct, ok
 }
 
 func parseURLHost(raw string) string {

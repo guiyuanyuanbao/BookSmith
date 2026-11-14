@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
-import { Reading, Search, Collection, Download, FolderOpened, Filter, DataBoard, Setting } from '@element-plus/icons-vue'
+import { Reading, Search, Collection, Download, FolderOpened, Filter, DataBoard, Setting, Compass } from '@element-plus/icons-vue'
 import DownloadPanel from '@/components/DownloadPanel.vue'
 import { useTasksStore } from '@/stores/tasks'
 
@@ -39,6 +39,7 @@ function onFadeEnter(el: Element, done: () => void) {
 const navs = computed(() => [
   { path: '/overview', title: '概览', desc: '统计', icon: DataBoard },
   { path: '/search', title: '搜索', desc: '找书', icon: Search },
+  { path: '/explore', title: '发现', desc: '榜单', icon: Compass },
   { path: '/books', title: '书架', desc: '我的书', icon: Collection },
   { path: '/tasks', title: '任务', desc: tasksStore.serverActiveCount > 0 ? `${tasksStore.serverActiveCount} 个进行中` : '空闲', icon: Download },
   { path: '/files', title: '导出', desc: '电子书', icon: FolderOpened },

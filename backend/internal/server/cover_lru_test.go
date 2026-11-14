@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -81,20 +82,20 @@ func TestCoverLRU_Remove(t *testing.T) {
 
 func TestMemCoverLRU_SingleEntryEviction(t *testing.T) {
 	lru := NewCoverLRU(memCoverMax, 0, nil)
-	// 写 300 条（超 256）→ 只驱逐最旧，不整体清空
-	for i := 0; i < 300; i++ {
-		lru.memPut(string(rune('a'+i%26))+string(rune('0'+i/26)), coverCacheEntry{data: []byte("x"), httpType: "image/jpeg"})
+	// 写超限（memCoverMax=1024，写 1200 条）→ 只驱逐最旧，不整体清空
+	for i := 0; i < memCoverMax+200; i++ {
+		lru.memPut(fmt.Sprintf("k%d", i), coverCacheEntry{data: []byte("x"), httpType: "image/jpeg"})
 	}
-	if lru.Len() > 256 {
-		t.Fatalf("内存缓存不应超过 256 条，实际 %d", lru.Len())
+	if lru.Len() > memCoverMax {
+		t.Fatalf("内存缓存不应超过 %d 条，实际 %d", memCoverMax, lru.Len())
 	}
-	if lru.Len() < 250 {
+	if lru.Len() < memCoverMax-50 {
 		t.Fatalf("应逐条驱逐而非整体清空，实际剩余 %d", lru.Len())
 	}
 	// 热键命中提温后仍在
 	lru.memPut("hot", coverCacheEntry{data: []byte("h"), httpType: "image/jpeg"})
-	for i := 0; i < 300; i++ {
-		lru.memPut(string(rune('A'+i%26))+string(rune('0'+i/26)), coverCacheEntry{data: []byte("y"), httpType: "image/jpeg"})
+	for i := 0; i < memCoverMax+200; i++ {
+		lru.memPut(fmt.Sprintf("k%d", i), coverCacheEntry{data: []byte("y"), httpType: "image/jpeg"})
 		if _, ok := lru.memGet("hot"); !ok {
 			t.Fatalf("热键在第 %d 次写入后被驱逐", i)
 		}

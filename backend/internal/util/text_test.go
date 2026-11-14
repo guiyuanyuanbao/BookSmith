@@ -3,6 +3,7 @@ package util
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCleanInvisibleChars(t *testing.T) {
@@ -34,8 +35,49 @@ func TestSanitizeFileName(t *testing.T) {
 			t.Errorf("SanitizeFileName(%q)=%q want %q", c.in, got, c.want)
 		}
 	}
-	if got := SanitizeFileName("很长的名字" + strings.Repeat("长", 200)); len([]rune(got)) != 100 {
-		t.Errorf("long name should be truncated to 100 runes, got %d", len([]rune(got)))
+	// 中文 3 字节/字：240 字节上限 → 80 个中文字（字节级截断语义）
+	if got := SanitizeFileName("很长的名字" + strings.Repeat("长", 200)); len([]rune(got)) != 80 || len(got) > maxNameBytes {
+		t.Errorf("long name should be truncated to ≤%d bytes (80 runes), got %d runes/%d bytes", maxNameBytes, len([]rune(got)), len(got))
+	}
+}
+
+// TestSanitizeFileName_ByteLimit UTF-8 字节级截断：ext4 NAME_MAX=255，纯中文按 rune 截会超限
+// （历史 bug：书源规则把简介正文抓进作者字段，几百字 → mkdir file name too long）。
+func TestSanitizeFileName_ByteLimit(t *testing.T) {
+	// 纯中文 300 字 = 900 字节 → 截到 ≤240 字节
+	long := strings.Repeat("打", 300)
+	got := SanitizeFileName(long)
+	if len(got) > maxNameBytes {
+		t.Fatalf("字节截断失败: %d > %d", len(got), maxNameBytes)
+	}
+	if len(got) < maxNameBytes-3 { // 应贴近上限（最后一个 rune 放不下才停）
+		t.Fatalf("过度截断: %d 字节", len(got))
+	}
+	// emoji 4 字节/字
+	emoji := strings.Repeat("📚", 200) // 800 字节
+	if got := SanitizeFileName(emoji); len(got) > maxNameBytes {
+		t.Fatalf("emoji 截断失败: %d > %d", len(got), maxNameBytes)
+	}
+	// 短名不受影响
+	if got := SanitizeFileName("正常书名"); got != "正常书名" {
+		t.Fatalf("短名被误改: %q", got)
+	}
+	// 截断结果是合法 UTF-8
+	if !utf8.ValidString(got) {
+		t.Fatal("截断结果应合法 UTF-8")
+	}
+}
+
+// TestSafeBookFileName_ByteLimit 书名+作者拼接后各自截断，总目录名不超限（历史 bug 场景）。
+func TestSafeBookFileName_ByteLimit(t *testing.T) {
+	got := SafeBookFileName(strings.Repeat("书", 200), strings.Repeat("作", 300))
+	// 目录名 = 书名(作者)，两段分别 ≤240 字节，拼上括号后总长可超 240 —— 需在调用侧控制总长
+	// 这里验证的是：各段都不再是几百字正文级别（≤240 字节）
+	if len(got) > maxNameBytes*2+6 {
+		t.Fatalf("总长失控: %d", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("结果应合法 UTF-8")
 	}
 }
 

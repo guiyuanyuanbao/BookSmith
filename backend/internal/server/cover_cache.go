@@ -94,15 +94,17 @@ func (s *Server) fetchAndCacheCover(rawURL string) ([]byte, string, bool) {
 }
 
 // CachedCoverImage 对外提供：导出层获取封面（内存/磁盘 LRU 优先，未命中远程抓取并缓存）。
+// 与代理同走信号量 + in-flight 去重（导出多格式并发取同一封面时共享一次抓取）。
 // 由 main 装配到 taskMgr.CoverProvider。
 func (a *App) CachedCoverImage(rawURL string) ([]byte, string, bool) {
 	if rawURL == "" || !strings.HasPrefix(rawURL, "http") {
 		return nil, "", false
 	}
-	if d, m, ok := a.coverCacheLookup(rawURL); ok {
-		return d, m, true
-	}
-	// 远程抓取并写缓存（复用代理同款客户端与逻辑）
+	return a.fetchCoverDeduped(rawURL)
+}
+
+// fetchAndCacheCoverDirect 直接抓取（调用方负责信号量；导出路径经 fetchCoverDeduped 已持有信号量时使用）。
+func (a *App) fetchAndCacheCoverDirect(rawURL string) ([]byte, string, bool) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", false
@@ -111,6 +113,7 @@ func (a *App) CachedCoverImage(rawURL string) ([]byte, string, bool) {
 		req.Header.Set("Referer", u)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
 	resp, err := a.CoverClient.Do(req)
 	if err != nil {
 		return nil, "", false
@@ -130,7 +133,6 @@ func (a *App) CachedCoverImage(rawURL string) ([]byte, string, bool) {
 	if !strings.HasPrefix(ct, "image/") {
 		return nil, "", false
 	}
-	coverCachePut(a.DataDir, rawURL, data, ct)
 	a.coverCacheStore(rawURL, data, ct)
 	return data, ct, true
 }

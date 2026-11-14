@@ -23,7 +23,9 @@ type BookSource struct {
 	RespondTime       int64         `json:"respondTime"`       // 响应时间(ms)
 	Weight            int           `json:"weight"`            // 权重
 	SearchURL         string        `json:"searchUrl"`         // 搜索 URL 规则
+	ExploreURL        string        `json:"exploreUrl"`        // 发现 URL 规则（分类列表）
 	RuleSearch        *RuleSearch   `json:"ruleSearch"`        // 搜索规则
+	RuleExplore       *RuleExplore  `json:"ruleExplore"`       // 发现规则（与搜索规则同构）
 	RuleBookInfo      *RuleBookInfo `json:"ruleBookInfo"`      // 详情规则
 	RuleToc           *RuleToc      `json:"ruleToc"`           // 目录规则
 	RuleContent       *RuleContent  `json:"ruleContent"`       // 正文规则
@@ -53,6 +55,9 @@ type RuleSearch struct {
 	CoverURL     string `json:"coverUrl"`
 	WordCount    string `json:"wordCount"`
 }
+
+// RuleExplore 发现规则（legado 与搜索规则同构，复用同字段形态）。
+type RuleExplore = RuleSearch
 
 // RuleBookInfo 详情规则。
 type RuleBookInfo struct {
@@ -106,6 +111,10 @@ func (s *BookSource) Clone() *BookSource {
 	if s.RuleSearch != nil {
 		r := *s.RuleSearch
 		cp.RuleSearch = &r
+	}
+	if s.RuleExplore != nil {
+		r := *s.RuleExplore
+		cp.RuleExplore = &r
 	}
 	if s.RuleBookInfo != nil {
 		r := *s.RuleBookInfo

@@ -97,8 +97,18 @@ func formatBookName(name string) string {
 	return strings.TrimSpace(bookNameSuffixRe.ReplaceAllString(name, ""))
 }
 
+// maxAuthorRunes 作者合理长度上限：真实作者名不会超过 50 字。
+// 书源规则抓错元素（如详情页第一个 <p> 是简介正文）会产生几百字的脏作者，
+// 覆盖搜索时的正确作者并进一步撑爆导出目录名——超长值直接判为解析错误丢弃。
+const maxAuthorRunes = 50
+
 func formatAuthor(author string) string {
-	return strings.TrimSpace(authorPrefixRe.ReplaceAllString(strings.TrimSpace(author), ""))
+	a := strings.TrimSpace(authorPrefixRe.ReplaceAllString(strings.TrimSpace(author), ""))
+	// 长度防御：书源规则解析错误的脏值（正文/简介片段）不外泄
+	if n := len([]rune(a)); n > maxAuthorRunes {
+		return ""
+	}
+	return a
 }
 
 func compileSafe(pattern string) *regexp.Regexp {

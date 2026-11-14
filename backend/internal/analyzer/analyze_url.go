@@ -530,3 +530,48 @@ func jsonUnmarshalLoose(b []byte, v any) error {
 	s := strings.ReplaceAll(string(b), "'", `"`)
 	return json.Unmarshal([]byte(s), v)
 }
+
+// ExploreKind 发现页分类（exploreUrl 解析产物）。
+type ExploreKind struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// AnalyzeExploreKinds 解析 legado exploreUrl 为分类列表。三种形态：
+//  1. <js>...</js> / @js: → JS 求值出 JSON 数组（binding page/key/baseUrl 注入）
+//  2. 直接 JSON 数组 [{"title":..,"url":..}] → 宽松解析
+//  3. 纯 URL（无分类结构）→ 单分类"全部分类"兜底
+// 分类 URL 里的 {{page}} 与 ,{options} 由 AnalyzeUrl 流水线在请求时处理，此处不展开。
+func AnalyzeExploreKinds(ruleURL, baseURL string, source BookSourceRef, js JSEngine, cookies CookieProvider) []ExploreKind {
+	au, err := NewAnalyzeUrl("", "", 1, baseURL, source, js, nil, cookies, nil)
+	if err != nil {
+		return nil
+	}
+	// 先跑 JS 段（binding 已在构造时注入）
+	expanded := au.analyzeJsMulti(ruleURL)
+	expanded = strings.TrimSpace(expanded)
+
+	// 形态 2：JSON 数组
+	if strings.HasPrefix(expanded, "[") {
+		var raw []map[string]any
+		if jsonUnmarshalLoose([]byte(expanded), &raw) == nil {
+			out := make([]ExploreKind, 0, len(raw))
+			for _, m := range raw {
+				title, _ := m["title"].(string)
+				url, _ := m["url"].(string)
+				if title == "" || url == "" {
+					continue
+				}
+				out = append(out, ExploreKind{Title: title, URL: url})
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+	}
+	// 形态 3：纯 URL 兜底（含 ,{options} 尾缀——URL 整体保留）
+	if expanded != "" && strings.Contains(expanded, "/") {
+		return []ExploreKind{{Title: "全部分类", URL: expanded}}
+	}
+	return nil
+}

@@ -117,6 +117,25 @@ type SearchOrigin struct {
 	RespondTime   int64  `json:"respondTime"` // ms
 }
 
+// ExploreKind 发现页分类（exploreUrl 解析产物）。
+type ExploreKind struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+// ExploreBook 发现页书籍条目（单源，无跨源聚合语义——发现是源维度的榜单）。
+type ExploreBook struct {
+	SourceURL   string `json:"sourceUrl"`
+	SourceName  string `json:"sourceName"`
+	BookURL     string `json:"bookUrl"`
+	Name        string `json:"name"`
+	Author      string `json:"author,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	CoverURL    string `json:"coverUrl,omitempty"`
+	Intro       string `json:"intro,omitempty"`
+	RespondTime int64  `json:"respondTime"` // ms
+}
+
 // DownloadTask 下载任务。
 type DownloadTask struct {
 	ID            int64      `json:"id"`

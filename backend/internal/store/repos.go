@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"booksmith/internal/model"
@@ -75,7 +76,7 @@ func scanSource(row *sql.Row) (*model.BookSource, error) {
 }
 
 // ListSources 列出书源。keyword 走 FTS（空为全部），enabledFilter: -1 全部 0 禁用 1 启用。
-func (s *Store) ListSources(keyword string, enabledFilter int, limit, offset int) ([]*model.BookSource, int, error) {
+func (s *Store) ListSources(keyword string, enabledFilter int, group string, limit, offset int) ([]*model.BookSource, int, error) {
 	where := "1=1"
 	args := []any{}
 	if keyword != "" {
@@ -85,6 +86,11 @@ func (s *Store) ListSources(keyword string, enabledFilter int, limit, offset int
 	if enabledFilter >= 0 {
 		where += ` AND enabled=?`
 		args = append(args, enabledFilter)
+	}
+	if group != "" {
+		// group_name 是逗号分隔多分组串（如「①🔰 正版,②🌸 常用」），子串匹配覆盖任一分组
+		where += ` AND group_name LIKE ?`
+		args = append(args, "%"+group+"%")
 	}
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM book_sources WHERE `+where, args...).Scan(&total); err != nil {
@@ -120,6 +126,33 @@ func (s *Store) ListSources(keyword string, enabledFilter int, limit, offset int
 		out = append(out, &bs)
 	}
 	return out, total, rows.Err()
+}
+
+// SourceGroups 全部分组名：group_name 是逗号分隔多分组串，拆分聚合去重排序。
+func (s *Store) SourceGroups() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT group_name FROM book_sources WHERE group_name != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var out []string
+	for rows.Next() {
+		var g string
+		if rows.Scan(&g) != nil {
+			continue
+		}
+		for _, part := range strings.Split(g, ",") {
+			p := strings.TrimSpace(part)
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, rows.Err()
 }
 
 // AllSources 全部书源（导出用）。

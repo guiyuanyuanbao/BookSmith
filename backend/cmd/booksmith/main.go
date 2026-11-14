@@ -118,6 +118,7 @@ func main() {
 		SearchJobs:   map[string]*server.SearchJob{},
 		CleanupJobs:  map[string]*server.CleanupJob{},
 		RepoSyncJobs: map[string]*source.SyncJob{},
+		ExploreJobs:  map[string]*server.ExploreJob{},
 	}
 	app.StartCoverProxy()
 	coverProvider = func(rawURL string) *export.CoverImage {

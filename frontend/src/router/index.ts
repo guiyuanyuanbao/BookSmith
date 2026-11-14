@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/overview', name: 'overview', component: () => import('@/views/OverviewView.vue'), meta: { title: '概览' } },
     { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '设置' } },
     { path: '/search', name: 'search', component: () => import('@/views/SearchView.vue'), meta: { title: '聚合搜索' } },
+    { path: '/explore', name: 'explore', component: () => import('@/views/ExploreView.vue'), meta: { title: '发现' } },
     { path: '/sources', name: 'sources', component: () => import('@/views/SourcesView.vue'), meta: { title: '书源管理' } },
     { path: '/rules', name: 'rules', component: () => import('@/views/RulesView.vue'), meta: { title: '净化规则' } },
     { path: '/books', name: 'books', component: () => import('@/views/BooksView.vue'), meta: { title: '书架' } },

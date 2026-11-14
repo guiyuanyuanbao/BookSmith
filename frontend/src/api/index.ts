@@ -304,6 +304,30 @@ export interface RepoSyncProgress {
   elapsedMs?: number
 }
 
+export interface ExploreKind {
+  title: string
+  url: string
+}
+
+export interface ExploreSourceInfo {
+  sourceUrl: string
+  sourceName: string
+  group?: string
+  kinds: ExploreKind[]
+}
+
+export interface ExploreBook {
+  sourceUrl: string
+  sourceName: string
+  bookUrl: string
+  name: string
+  author?: string
+  kind?: string
+  coverUrl?: string
+  intro?: string
+  respondTime: number
+}
+
 export interface ImportResult {
   total: number
   inserted: number
@@ -378,8 +402,9 @@ export const api = {
   authLogin: (key: string) => apiPost<{ required: boolean; ok?: boolean }>('/api/auth/login', { key }),
 
   // 书源
-  listSources: (params?: { keyword?: string; enabled?: number; limit?: number; offset?: number }) =>
+  listSources: (params?: { keyword?: string; enabled?: number; group?: string; limit?: number; offset?: number }) =>
     apiGet<{ items: BookSource[]; total: number }>('/api/sources', params),
+  sourceGroups: () => apiGet<{ groups: string[] }>('/api/sources/groups'),
   importSources: (body: { url?: string; text?: string }) =>
     apiPost<ImportResult>('/api/sources/import', body),
   // 书源广场：动态发现仓库条目 + 异步同步任务
@@ -396,6 +421,14 @@ export const api = {
     apiGet<YioveSourcePage>('/api/sources/yiove-search', { apiBase, keyword, type, page, pageSize }),
   yioveImportURL: (apiBase: string, page: number, pageSize = 20) =>
     apiGet<{ url: string }>('/api/sources/yiove-import-url', { apiBase, page, pageSize }),
+
+  // 发现页
+  exploreSources: () => apiGet<{ sources: ExploreSourceInfo[] }>('/api/explore/sources'),
+  exploreStart: (body: { sourceUrls: string[]; kinds: string[]; page?: number }) =>
+    apiPost<{ exploreId: string; total: number }>('/api/explore', body),
+  exploreState: (id: string) =>
+    apiGet<{ books: ExploreBook[]; errors: string[]; running: boolean; err?: string; elapsedMs?: number }>(`/api/explore/${id}`),
+  exploreCancel: (id: string) => apiDelete(`/api/explore/${id}`),
   exportSources: () => withKey(`/api/sources/export`),
   setSourceEnabled: (url: string, enabled: boolean) =>
     apiPatch(`/api/sources/${encodeURIComponent(url)}`, { enabled }),
@@ -434,8 +467,8 @@ export const api = {
     apiPost<{ result: string }>('/api/replace/test', body),
 
   // 搜索（异步任务）
-  searchStart: (key: string, sourceUrls?: string[]) =>
-    apiPost<{ searchId: string }>('/api/search', { key, sourceUrls }),
+  searchStart: (key: string, sourceUrls?: string[], excludeUrls?: string[]) =>
+    apiPost<{ searchId: string }>('/api/search', { key, sourceUrls, excludeUrls }),
   searchState: (id: string) => apiGet<SearchJobState>(`/api/search/${id}`),
   searchCancel: (id: string) => apiDelete(`/api/search/${id}`),
 
