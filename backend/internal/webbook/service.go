@@ -31,8 +31,6 @@ type Service struct {
 	SourceConcurrency int
 	// PageConcurrency 目录/正文分页并发数
 	PageConcurrency int
-	// NextChapterProvider 查询下一章 URL（task 层注入，返回 "" 表示未知）
-	NextChapterProvider func(book *model.Book, index int) string
 }
 
 // New 创建服务。
@@ -646,7 +644,9 @@ func (s *Service) parseChapters(bs *model.BookSource, elements []any, baseURL st
 // ---------------- 正文 ----------------
 
 // GetContent 获取章节正文（nextContentUrl 翻页 + 净化管线）。
-func (s *Service) GetContent(ctx context.Context, bs *model.BookSource, book *model.Book, chapter *model.Chapter) (string, error) {
+// nextChapterURL 为下一章 URL（终止翻页判断用；"" 表示未知）——显式传参，
+// 替代原先 Service 上的 NextChapterProvider 全局可变字段（并发任务会互相串台）。
+func (s *Service) GetContent(ctx context.Context, bs *model.BookSource, book *model.Book, chapter *model.Chapter, nextChapterURL string) (string, error) {
 	rc := bs.RuleContent
 	if rc == nil || strings.TrimSpace(rc.Content) == "" {
 		return "", fmt.Errorf("书源 %s 未配置正文规则", bs.BookSourceName)
@@ -655,8 +655,7 @@ func (s *Service) GetContent(ctx context.Context, bs *model.BookSource, book *mo
 		return "", nil // 卷名不解析正文
 	}
 
-	// 下一章 URL（终止翻页判断用）
-	nextChapterURL := s.nextChapterURL(bs, book, chapter)
+	// 下一章 URL（终止翻页判断用）——由调用方显式传入
 
 	body, finalURL, err := s.fetchWithRule(ctx, bs, chapter.URL, book.TocURL, 1, "")
 	if err != nil {
@@ -784,12 +783,6 @@ func (s *Service) contentNextURLs(bs *model.BookSource, body, baseURL, rule stri
 }
 
 // nextChapterURL 查询下一章 URL（目录内 index+1）。
-func (s *Service) nextChapterURL(bs *model.BookSource, book *model.Book, chapter *model.Chapter) string {
-	if s.NextChapterProvider != nil {
-		return s.NextChapterProvider(book, chapter.Index)
-	}
-	return ""
-}
 
 // snapshotAgg 生成可安全跨 goroutine 序列化的聚合快照。
 func snapshotAgg(agg *Aggregated) *Aggregated {

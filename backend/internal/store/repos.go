@@ -362,7 +362,19 @@ func (s *Store) ReplaceRuleCount() (int, error) {
 // ---------------- Book ----------------
 
 // UpsertBook 插入或更新书（按 bookUrl+origin 去重），返回 ID。
+// 冲突路径保留旧记录的 LocalCover：搜索页重新下载会构造无 LocalCover 的新记录，
+// 整体覆盖会丢掉用户上传/抓取的本地封面（书架封面回落、导出丢封面）。
 func (s *Store) UpsertBook(b *model.Book) (int64, error) {
+	// 冲突时若新记录无 LocalCover 而旧记录有 → 先回填
+	if b.LocalCover == "" {
+		var oldData string
+		if err := s.db.QueryRow(`SELECT data FROM books WHERE book_url=? AND origin=?`, b.BookURL, b.Origin).Scan(&oldData); err == nil {
+			var old model.Book
+			if jsonUnmarshal(oldData, &old) == nil && old.LocalCover != "" {
+				b.LocalCover = old.LocalCover
+			}
+		}
+	}
 	data, err := marshal(b)
 	if err != nil {
 		return 0, err

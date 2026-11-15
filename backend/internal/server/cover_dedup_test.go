@@ -21,6 +21,7 @@ func TestCoverFetchDeduped(t *testing.T) {
 	defer imgSrv.Close()
 
 	app, _ := newCoverTestApp(t)
+	app.AllowPrivateCoverFetch = true
 	app.StartCoverProxy()
 
 	const n = 12
@@ -61,6 +62,7 @@ func TestCoverFetchSemaphore(t *testing.T) {
 	defer imgSrv.Close()
 
 	app, _ := newCoverTestApp(t)
+	app.AllowPrivateCoverFetch = true
 	app.StartCoverProxy()
 
 	var wg sync.WaitGroup

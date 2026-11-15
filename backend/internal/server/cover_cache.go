@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"encoding/hex"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,8 +119,35 @@ func (a *App) CachedCoverImage(rawURL string) ([]byte, string, bool) {
 	return a.fetchCoverDeduped(rawURL)
 }
 
+// isPrivateHost 封面抓取目标内网防护（公网部署 SSRF 面）：
+// 拒绝 loopback/私网/link-local/未指定地址与非 http(s) 端口。
+// 域名（非 IP）不拦——由源站自身 DNS 决定，做完整 DNS 级防护需自定义 Dialer，超出封面代理范畴。
+func isPrivateHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return true
+	}
+	host := u.Hostname()
+	if host == "" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+	}
+	// 主机名形态的本地标识
+	lower := strings.ToLower(host)
+	return lower == "localhost" || strings.HasSuffix(lower, ".localhost") || lower == "0.0.0.0"
+}
+
 // fetchAndCacheCoverDirect 直接抓取（调用方负责信号量；导出路径经 fetchCoverDeduped 已持有信号量时使用）。
 func (a *App) fetchAndCacheCoverDirect(rawURL string) ([]byte, string, bool) {
+	if !a.AllowPrivateCoverFetch && isPrivateHost(rawURL) {
+		return nil, "", false // 内网/本地地址拒绝代抓
+	}
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", false

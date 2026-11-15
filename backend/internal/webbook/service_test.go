@@ -248,7 +248,7 @@ func TestGetContentWithPagination(t *testing.T) {
 	bs := testutil.FixtureHTMLSource(fs.Base)
 	book := &model.Book{BookURL: fs.Base + "/book/1.html", TocURL: fs.Base + "/book/1.html", Name: "斗破苍穹"}
 	chapter := &model.Chapter{Index: 0, URL: fs.Base + "/book/1/1.html", Title: "第一章"}
-	text, err := svc.GetContent(context.Background(), bs, book, chapter)
+	text, err := svc.GetContent(context.Background(), bs, book, chapter, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestGetContentSimple(t *testing.T) {
 	bs := testutil.FixtureHTMLSource(fs.Base)
 	book := &model.Book{Name: "凡人修仙传", BookURL: fs.Base + "/book/2.html", TocURL: fs.Base + "/book/2.html"}
 	chapter := &model.Chapter{Index: 0, URL: fs.Base + "/book/2/9.html"}
-	text, err := svc.GetContent(context.Background(), bs, book, chapter)
+	text, err := svc.GetContent(context.Background(), bs, book, chapter, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestGetContentJSON(t *testing.T) {
 	bs := testutil.FixtureJSONSource(fs.Base)
 	book := &model.Book{Origin: bs.BookSourceURL, BookURL: fs.Base + "/api/book/5", TocURL: fs.Base + "/api/book/5"}
 	chapter := &model.Chapter{Index: 0, URL: fs.Base + "/api/ch/1"}
-	text, err := svc.GetContent(context.Background(), bs, book, chapter)
+	text, err := svc.GetContent(context.Background(), bs, book, chapter, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestContentReplaceRules(t *testing.T) {
 	bs := testutil.FixtureHTMLSource(fs.Base)
 	book := &model.Book{Name: "斗破苍穹", Origin: bs.BookSourceURL, BookURL: fs.Base + "/book/1.html", TocURL: fs.Base + "/book/1.html"}
 	chapter := &model.Chapter{Index: 0, URL: fs.Base + "/book/1/1.html"}
-	text, err := svc.GetContent(context.Background(), bs, book, chapter)
+	text, err := svc.GetContent(context.Background(), bs, book, chapter, "")
 	if err != nil {
 		t.Fatal(err)
 	}

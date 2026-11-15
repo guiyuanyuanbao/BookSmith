@@ -121,7 +121,7 @@ func (s *Service) DebugSearch(ctx context.Context, bs *model.BookSource, key str
 	st = time.Now()
 	cctx, ccancel := context.WithTimeout(ctx, 30*time.Second)
 	defer ccancel()
-	content, err := s.GetContent(cctx, bs, book, firstChapter)
+	content, err := s.GetContent(cctx, bs, book, firstChapter, "")
 	if err != nil {
 		step("解析正文", err.Error(), false, st)
 		trace.Err = err.Error()

@@ -142,6 +142,10 @@ async function doSearch() {
   started.value = true
   loading.value = true
   job.value = null
+  // 先关上一条 SSE：每次搜索都新建 EventSource，不关会泄漏连接
+  // （浏览器同源 HTTP/1.1 限 6 连接，泄漏 5-6 次后所有轮询/封面/新 SSE 全部挂起）
+  closeSSE?.()
+  closeSSE = null
   closeSSE = subscribeEvents({
     onSearchProgress: (d) => {
       if (d.searchId === searchId && job.value) {

@@ -101,10 +101,15 @@ func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSour
 	if book.Name == "" {
 		return 0, false, fmt.Errorf("书名不能为空")
 	}
-	// 同书同源去重：已有活动任务（running/pending/exporting）则直接复用
+	// 同书同源去重 + 建任务放进临界区：check-then-act 分离时两个并发创建
+	// 会产生同书双流水线（章节状态互相错配、导出互相覆盖）。m.mu 同时保护
+	// pauseReq/cancelReq map，临界区内只做 store 操作（无嵌套锁，无死锁面）。
+	m.mu.Lock()
+	// 已有活动任务（running/pending/exporting）则直接复用
 	if book.BookURL != "" && bs.BookSourceURL != "" {
 		if existing, err := m.st.FindBookByURLAndOrigin(book.BookURL, bs.BookSourceURL); err == nil {
 			if at, err := m.st.ActiveTaskByBook(existing.ID); err == nil {
+				m.mu.Unlock()
 				return at.ID, true, nil
 			}
 		}
@@ -150,8 +155,11 @@ func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSour
 	}
 	taskID, err := m.st.CreateTask(t)
 	if err != nil {
+		m.mu.Unlock()
 		return 0, false, err
 	}
+	m.mu.Unlock()
+	// go m.run 放在解锁后：run 内部立即取 m.mu（重入保护），持锁启动会引入无谓的锁排队
 	go m.run(taskID, book, bs)
 	return taskID, false, nil
 }
@@ -201,9 +209,9 @@ func (m *Manager) run(taskID int64, book *model.Book, bs *model.BookSource) {
 		// 自动换源：目录失败时依次尝试候选源（快捷下载注入；显式选源不启用）
 		if len(t.CandidateSources) > 0 {
 			switched := false
+			// 原源失败只记一次（循环内再记会把原源名重复 n+1 次）
+			t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: bs.BookSourceName, Err: tocErr.Error()})
 			for _, cand := range t.CandidateSources {
-				// 记录失败源
-				t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: bs.BookSourceName, Err: tocErr.Error()})
 				// 换下一个候选
 				candBs, serr := m.st.GetSource(cand.SourceURL)
 				if serr != nil {
@@ -221,6 +229,8 @@ func (m *Manager) run(taskID int64, book *model.Book, bs *model.BookSource) {
 					switched = true
 					break
 				}
+				// 该候选源失败：记录其自身的失败原因（供最终错误信息排查）
+				t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: cand.SourceName, Err: tocErr.Error()})
 			}
 			if !switched {
 				var hist strings.Builder
@@ -382,12 +392,13 @@ func (m *Manager) fetchToc(t *model.DownloadTask, book *model.Book, bs *model.Bo
 
 // runContent 并发抓取正文。
 func (m *Manager) runContent(ctx context.Context, t *model.DownloadTask, book *model.Book, bs *model.BookSource, chapters []*model.Chapter) {
-	// 下一章 URL 供正文翻页终止判断
-	m.svc.NextChapterProvider = func(b *model.Book, index int) string {
-		if index+1 < len(chapters) {
-			return chapters[index+1].URL
+	// 下一章 URL 映射：正文翻页终止判断用（显式传参给 GetContent，
+	// 不能放 Service 单例字段上——并发任务会互相串台）
+	nextURLByIndex := make(map[int]string, len(chapters))
+	for i, ch := range chapters {
+		if i+1 < len(chapters) {
+			nextURLByIndex[ch.Index] = chapters[i+1].URL
 		}
-		return ""
 	}
 
 	// 待下载章节序号（跳过卷；跳过区间外）
@@ -418,7 +429,7 @@ func (m *Manager) runContent(ctx context.Context, t *model.DownloadTask, book *m
 				if m.checkPauseCancel(t.ID) {
 					continue
 				}
-				m.fetchChapter(ctx, t.ID, book, bs, idx)
+				m.fetchChapter(ctx, t.ID, book, bs, idx, nextURLByIndex)
 			}
 		}()
 	}
@@ -463,7 +474,8 @@ func (m *Manager) pauseRequested(taskID int64) bool {
 }
 
 // fetchChapter 抓取并保存单章（带重试与单章超时；规则异常不杀死进程）。
-func (m *Manager) fetchChapter(ctx context.Context, taskID int64, book *model.Book, bs *model.BookSource, index int) {
+// nextURLByIndex：章节序号 → 下一章 URL（正文翻页终止判断）。
+func (m *Manager) fetchChapter(ctx context.Context, taskID int64, book *model.Book, bs *model.BookSource, index int, nextURLByIndex map[int]string) {
 	defer func() {
 		if r := recover(); r != nil {
 			_ = m.st.SaveChapterContent(book.ID, int64(index), "", model.ChapterFailed,
@@ -481,7 +493,7 @@ func (m *Manager) fetchChapter(ctx context.Context, taskID int64, book *model.Bo
 			return
 		}
 		cctx, cancel := context.WithTimeout(ctx, m.ChapterTimeout)
-		text, err := m.svc.GetContent(cctx, bs, book, ch)
+		text, err := m.svc.GetContent(cctx, bs, book, ch, nextURLByIndex[ch.Index])
 		cancel()
 		if err == nil && text != "" {
 			_ = m.st.SaveChapterContent(book.ID, int64(index), text, model.ChapterDone, "")
@@ -774,6 +786,12 @@ func (m *Manager) RetryFailed(id int64) error {
 	t, err := m.st.GetTask(id)
 	if err != nil {
 		return err
+	}
+	// 状态守卫：运行中/排队/导出中的任务禁止重跑——重置失败章节会与活动流水线
+	// 交叉（重置的章节不在当前 indexes 里 → 任务显示 done 却有 pending 章节）
+	switch t.Status {
+	case model.TaskRunning, model.TaskPending, model.TaskExporting:
+		return fmt.Errorf("任务正在运行，无法重跑失败章节")
 	}
 	if err := m.st.ResetFailedChapters(t.BookID); err != nil {
 		return err

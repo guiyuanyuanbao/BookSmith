@@ -116,6 +116,7 @@ func TestPreserveGroupCovers_DownloadsCoverWhenNoRemaining(t *testing.T) {
 	a := mustBook(t, app, "测试书D", "作者", "http://a.com", imgSrv.URL+"/cover.jpg", "")
 	b := mustBook(t, app, "测试书D", "作者", "http://b.com", "", "")
 
+	app.AllowPrivateCoverFetch = true
 	app.StartCoverProxy()
 	s := &Server{app: srv.app}
 	s.preserveGroupCovers([]int64{a.ID})

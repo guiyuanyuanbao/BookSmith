@@ -48,6 +48,9 @@ type App struct {
 	CoverDiskLRU *CoverLRU
 	// coverFetchSem 远程封面抓取全局并发信号量（发现页一屏 40+ 未知 URL 并发，防打挂源站）
 	coverFetchSem chan struct{}
+	// AllowPrivateCoverFetch 测试开关：跳过内网防护（httptest 只监听 loopback）。
+	// 生产恒为 false——SSRF 防护始终生效。
+	AllowPrivateCoverFetch bool
 	// coverInflight 同 URL 抓取去重：并发 miss 只抓一次，其余等待共享结果
 	coverInflightMu sync.Mutex
 	coverInflight   map[string]*coverInflightEntry

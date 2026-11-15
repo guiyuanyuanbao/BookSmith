@@ -362,6 +362,8 @@ func parseURLHost(raw string) string {
 	return u.Scheme + "://" + u.Host + "/"
 }
 
+// sniffImageType 按魔数嗅探图片类型；未知内容返回空串（抓取层拒绝非真图片，
+// 不再兜底 image/jpeg——否则内网页面/HTML 会被当封面缓存回传，构成读原语）。
 func sniffImageType(d []byte) string {
 	switch {
 	case len(d) > 3 && d[0] == 0xFF && d[1] == 0xD8:
@@ -373,7 +375,7 @@ func sniffImageType(d []byte) string {
 	case len(d) > 12 && string(d[8:12]) == "WEBP":
 		return "image/webp"
 	}
-	return "image/jpeg"
+	return ""
 }
 
 // ---------------- 书源校验 ----------------
