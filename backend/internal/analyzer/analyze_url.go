@@ -569,7 +569,31 @@ func AnalyzeExploreKinds(ruleURL, baseURL string, source BookSourceRef, js JSEng
 			}
 		}
 	}
-	// 形态 3：纯 URL 兜底（含 ,{options} 尾缀——URL 整体保留）
+	// 形态 3：多行 "标题::URL" 形制（legado 标准写法，如"玄幻::/xiaoshuofenlei/xuanhuan.html"）。
+	// 行内可含 <page> 页码数组尾缀；URL 为空的行是分组标题（如"♂::"），跳过。
+	if lines := strings.Split(expanded, "\n"); len(lines) > 0 && strings.Contains(lines[0], "::") {
+		out := make([]ExploreKind, 0, len(lines))
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			parts := strings.SplitN(line, "::", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			title := strings.TrimSpace(parts[0])
+			url := strings.TrimSpace(parts[1])
+			if title == "" || url == "" {
+				continue // 分组标题行（url 为空）
+			}
+			out = append(out, ExploreKind{Title: title, URL: url})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	// 形态 4：纯 URL 兜底（含 ,{options} 尾缀——URL 整体保留）
 	if expanded != "" && strings.Contains(expanded, "/") {
 		return []ExploreKind{{Title: "全部分类", URL: expanded}}
 	}

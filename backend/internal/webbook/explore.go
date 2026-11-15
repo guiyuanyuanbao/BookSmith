@@ -23,10 +23,14 @@ type cachedExploreKinds struct {
 	fetchedAt time.Time
 }
 
-// ExploreKinds 解析源的分类列表（5 分钟缓存）。无 exploreUrl 或解析为空返回 nil。
+// ExploreKinds 解析源的分类列表（5 分钟缓存）。以下情形返回 nil（前端不展示）：
+// 未启用发现、exploreUrl 为空、ruleExplore.bookList 为空（无法解析列表，点了也必然失败）。
 func (s *Service) ExploreKinds(bs *model.BookSource) []model.ExploreKind {
 	if bs == nil || !bs.EnabledExplore || strings.TrimSpace(bs.ExploreURL) == "" {
 		return nil
+	}
+	if bs.RuleExplore == nil || strings.TrimSpace(bs.RuleExplore.BookList) == "" {
+		return nil // 未配置发现规则：源树不展示，避免"点了就报错"的假可用源
 	}
 	key := bs.BookSourceURL
 	exploreKindsCache.mu.Lock()
@@ -50,7 +54,7 @@ func (s *Service) ExploreKinds(bs *model.BookSource) []model.ExploreKind {
 // ExploreOne 抓取单源某分类的书籍列表（page 从 1 开始）。
 func (s *Service) ExploreOne(ctx context.Context, bs *model.BookSource, kindURL string, page int) ([]*model.ExploreBook, error) {
 	if bs.RuleExplore == nil || strings.TrimSpace(bs.RuleExplore.BookList) == "" {
-		return nil, fmt.Errorf("书源 %s 未配置发现规则（ruleExplore.bookList）", bs.BookSourceName)
+		return nil, fmt.Errorf("书源 %s 的 ruleExplore 未配置 bookList（该源无法解析发现列表）", bs.BookSourceName)
 	}
 	body, finalURL, err := s.fetchWithRule(ctx, bs, kindURL, bs.BookSourceURL, page, "")
 	if err != nil {
