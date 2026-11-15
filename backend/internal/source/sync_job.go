@@ -84,6 +84,24 @@ func (m *Manager) StartSyncJob(repo SourceRepo, cleanup bool, publish func(task.
 			delete(m.syncing, repo.URL)
 			m.mu.Unlock()
 		}()
+		// panic 兜底：running 僵尸会让前端永远转圈并挤占保留名额
+		defer func() {
+			if r := recover(); r != nil {
+				job.update(func(p *SyncProgress) {
+					p.Err = fmt.Sprintf("内部异常: %v", r)
+					p.Running = false
+					p.Finished = true
+				})
+				if publish != nil {
+					snap := job.Snapshot()
+					publish(task.Event{Type: "repo.sync.progress", Data: map[string]any{
+						"jobId": job.ID, "repoName": snap.RepoName, "total": snap.Total,
+						"done": snap.Done, "inserted": snap.Inserted, "updated": snap.Updated,
+						"running": false, "err": snap.Err,
+					}})
+				}
+			}
+		}()
 		m.runSyncJob(ctx, job, repo, publish)
 	}()
 	return job, nil

@@ -117,7 +117,7 @@ func TestClientRateLimit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
 	c := NewClient()
-	c.SetRateLimit(hostOf(srv.URL), 1, 100*time.Millisecond) // 每 100ms 一次
+	c.SetRateLimit(HostOf(srv.URL), 1, 100*time.Millisecond) // 每 100ms 一次
 	start := time.Now()
 	for i := 0; i < 3; i++ {
 		if _, err := c.Do(context.Background(), &Request{URL: srv.URL}); err != nil {

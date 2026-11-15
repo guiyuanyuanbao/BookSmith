@@ -316,20 +316,26 @@ func (cm *CacheManager) GetFile(key string) string {
 
 // ApplySourceRateLimit 将书源 concurrentRate 应用到客户端限流。
 // legado 语义：固定窗口 N 次/M 毫秒；纯整数 M 等价 1 次/M 毫秒。
+// 限流键必须与 httpx.Client 的请求键一致（hostOf(url) = 裸主机名）——
+// 历史 bug：用完整 sourceURL 作键，请求查找用主机名，永远查不到 → 限流失效。
 func (e *Env) ApplySourceRateLimit(sourceURL, concurrentRate string) {
 	s := strings.TrimSpace(concurrentRate)
 	if s == "" || s == "0" {
+		return
+	}
+	host := httpx.HostOf(sourceURL)
+	if host == "" {
 		return
 	}
 	if strings.Contains(s, "/") {
 		count, window := httpx.ParseConcurrentRate(s)
 		if count > 0 && window > 0 {
 			// 折算为每次请求最小间隔（保守实现，避免突发突发流量）
-			e.Client.SetRateLimit(sourceURL, 1, window/time.Duration(count))
+			e.Client.SetRateLimit(host, 1, window/time.Duration(count))
 		}
 		return
 	}
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil && n > 0 {
-		e.Client.SetRateLimit(sourceURL, 1, time.Duration(n)*time.Millisecond)
+		e.Client.SetRateLimit(host, 1, time.Duration(n)*time.Millisecond)
 	}
 }

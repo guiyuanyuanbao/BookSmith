@@ -68,16 +68,19 @@ func TestSanitizeFileName_ByteLimit(t *testing.T) {
 	}
 }
 
-// TestSafeBookFileName_ByteLimit 书名+作者拼接后各自截断，总目录名不超限（历史 bug 场景）。
+// TestSafeBookFileName_ByteLimit 书名+作者拼接后组合结果也必须 ≤255 字节
+// （历史 bug 第二段：各段 240B 截断后组合可达 482B，Linux 下仍 ENAMETOOLONG）。
 func TestSafeBookFileName_ByteLimit(t *testing.T) {
 	got := SafeBookFileName(strings.Repeat("书", 200), strings.Repeat("作", 300))
-	// 目录名 = 书名(作者)，两段分别 ≤240 字节，拼上括号后总长可超 240 —— 需在调用侧控制总长
-	// 这里验证的是：各段都不再是几百字正文级别（≤240 字节）
-	if len(got) > maxNameBytes*2+6 {
-		t.Fatalf("总长失控: %d", len(got))
+	if len(got) > maxNameBytes {
+		t.Fatalf("组合名超限: %d 字节 > %d（ext4 NAME_MAX=255 会 ENAMETOOLONG）", len(got), maxNameBytes)
 	}
 	if !utf8.ValidString(got) {
 		t.Fatal("结果应合法 UTF-8")
+	}
+	// 短名不受影响
+	if SafeBookFileName("凡人修仙传", "忘语") != "凡人修仙传(忘语)" {
+		t.Fatal("短名组合被误改")
 	}
 }
 

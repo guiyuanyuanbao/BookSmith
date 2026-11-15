@@ -27,8 +27,13 @@ const exploreErr = ref('')
 const page = ref(1)
 let exploreId = ''
 let pollTimer: number | null = null
+let pollFallbackTimer: number | null = null
 // 本次加载是否为追加模式（pollOnce 落地结果时按此决定覆盖还是合并）
 let pendingAppend = false
+// 本轮轮询所属 job id 快照：pollOnce 回来时 exploreId 已变（新一轮 loadBooks 已起）则丢弃结果
+let pollingJobId = ''
+// pollOnce 互斥：interval 与 3s 兜底并发时只跑一个
+let polling = false
 
 const allGroups = computed(() => {
   const set = new Set<string>()
@@ -65,6 +70,10 @@ function stopPoll() {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  if (pollFallbackTimer !== null) {
+    clearTimeout(pollFallbackTimer)
+    pollFallbackTimer = null
+  }
 }
 
 function pickSource(sourceUrl: string) {
@@ -99,16 +108,24 @@ function pickKind(kindUrl: string, kindTitle: string) {
 }
 
 async function pollOnce() {
-  if (!exploreId) return
+  if (!exploreId || polling) return
+  // exploreId 已变（新一轮 loadBooks 已起）→ 本轮结果作废
+  if (pollingJobId !== exploreId) return
+  polling = true
+  const jobSnapshot = exploreId
   try {
-    const r = await api.exploreState(exploreId)
+    const r = await api.exploreState(jobSnapshot)
     if (r.running) return
+    // 结果落地前再校验：期间用户可能已切分类/切源（exploreId 被新 job 覆盖）
+    if (pollingJobId !== exploreId) return
     stopPoll()
     loadingBooks.value = false
     if (r.err) {
-      // 追加加载失败不清空已有内容，仅在网格为空时显示错误
+      // 追加加载失败不清空已有内容，但在按钮旁提示（否则用户无限静默失败）
       if (!pendingAppend || !books.value.length) {
         exploreErr.value = r.err
+      } else {
+        ElMessage.warning(`${r.err.slice(0, 60)}（追加失败，已有内容保留）`)
       }
       return
     }
@@ -132,11 +149,15 @@ async function pollOnce() {
     stopPoll()
     loadingBooks.value = false
     pendingAppend = false
+  } finally {
+    polling = false
   }
 }
 
 async function loadBooks(p: number, append: boolean) {
   if (!activeSource.value || !activeKind.value) return
+  // 同步段先停旧轮询：await exploreStart 期间旧 pollOnce 不再污染新状态
+  stopPoll()
   loadingBooks.value = true
   pendingAppend = append
   if (!append) exploreErr.value = ''
@@ -147,12 +168,12 @@ async function loadBooks(p: number, append: boolean) {
       page: p,
     })
     exploreId = r.exploreId
+    pollingJobId = r.exploreId
     page.value = p
     if (!append) books.value = []
-    stopPoll()
     pollTimer = window.setInterval(() => pollOnce(), 1200)
-    // 兜底：3s 后还没结果就主动 poll 一次
-    setTimeout(() => { if (loadingBooks.value) pollOnce() }, 3000)
+    // 兜底：3s 后还没结果就主动 poll 一次（句柄被 stopPoll 管理，不会与 interval 叠加）
+    pollFallbackTimer = window.setTimeout(() => { if (loadingBooks.value) pollOnce() }, 3000)
   } catch (e: any) {
     loadingBooks.value = false
     exploreErr.value = e.message

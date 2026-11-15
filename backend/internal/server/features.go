@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -152,6 +153,18 @@ func (s *Server) startSearch(key string, sourceURLs []string, excludeURLs []stri
 
 	go func() {
 		defer cancel()
+		// panic 兜底：running 僵尸会让同 key 搜索被永久复用死任务（startSearch 复用逻辑）
+		defer func() {
+			if r := recover(); r != nil {
+				agg := &webbook.Aggregated{Total: len(sources), Searched: len(sources),
+					ElapsedMS: time.Since(job.StartedAt).Milliseconds()}
+				agg.Errors = append(agg.Errors, webbook.SourceError{Source: "内部", Err: fmt.Sprintf("内部异常: %v", r)})
+				job.finish(agg)
+				s.app.Bus.Publish(task.Event{Type: "search.done", Data: map[string]any{
+					"searchId": job.ID, "key": key, "items": 0,
+				}})
+			}
+		}()
 		agg := s.app.WebBook.Search(ctx, sources, key, func(snap *webbook.Aggregated) {
 			job.setProgress(snap)
 			s.app.Bus.Publish(task.Event{Type: "search.progress", Data: map[string]any{
@@ -320,6 +333,9 @@ func (a *App) fetchCoverDeduped(rawURL string) ([]byte, string, bool) {
 
 	// 首个请求者：抓取（信号量限流）
 	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[cover-fetch] 抓取 %s 内部异常: %v", rawURL, r) // 等待者拿到 ok=false（502），但 panic 不再静默
+		}
 		a.coverInflightMu.Lock()
 		delete(a.coverInflight, rawURL)
 		a.coverInflightMu.Unlock()

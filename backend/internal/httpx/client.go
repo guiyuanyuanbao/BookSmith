@@ -334,7 +334,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 			lastErr = fmt.Errorf("http %d: %s", resp.StatusCode, req.URL)
 			if resp.StatusCode == http.StatusTooManyRequests {
 				// 自动学习限流：429 后对该主机施加递增的最小间隔（1s→2s→4s，上限 8s）
-				if host := hostOf(req.URL); host != "" {
+				if host := HostOf(req.URL); host != "" {
 					c.limiter.learnBackoff(host)
 				}
 				// Retry-After 秒数优先；否则指数退避（500ms/1s/2s…上限 10s）
@@ -365,7 +365,7 @@ func (c *Client) Do(ctx context.Context, req *Request) (*Response, error) {
 		}
 		// 请求成功：清除该主机的 429 冷却
 		if resp.StatusCode < 400 {
-			c.limiter.clearBlock(hostOf(req.URL))
+			c.limiter.clearBlock(HostOf(req.URL))
 		}
 		return resp, nil
 	}
@@ -427,7 +427,7 @@ func (c *Client) doOnce(ctx context.Context, req *Request) (*Response, error) {
 	defer cancel()
 
 	start := time.Now()
-	release, err := c.limiter.acquire(rctx, hostOf(req.URL))
+	release, err := c.limiter.acquire(rctx, HostOf(req.URL))
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +546,8 @@ func (p *peekReader) Read(b []byte) (int, error) {
 	return p.r.Read(b)
 }
 
-func hostOf(rawURL string) string {
+// HostOf URL → 裸主机名（限流键；导出供 ApplySourceRateLimit 对齐请求键）。
+func HostOf(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return rawURL

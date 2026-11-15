@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 // coverCachePath URL → 磁盘缓存文件路径。
 func coverCachePath(dataDir, rawURL string) string {
@@ -47,11 +48,14 @@ func coverCacheGet(dataDir, rawURL string) ([]byte, string, bool) {
 	return data[idx+1:], mime, true
 }
 
+// coverTmpSeq tmp 文件名原子序号：同进程并发写同一 URL 时避免共享路径交叉写坏缓存。
+var coverTmpSeq atomic.Int64
+
 // coverCachePut 写入磁盘缓存（图片字节 + mime 头）。
 func coverCachePut(dataDir, rawURL string, data []byte, mime string) {
 	os.MkdirAll(filepath.Join(dataDir, "covers"), 0o755)
 	p := coverCachePath(dataDir, rawURL)
-	tmp := fmt.Sprintf("%s.%d.tmp", p, os.Getpid())
+	tmp := fmt.Sprintf("%s.%d.%d.tmp", p, os.Getpid(), coverTmpSeq.Add(1))
 	if err := os.WriteFile(tmp, append([]byte("mime:"+mime+"\n"), data...), 0o644); err != nil {
 		return
 	}
@@ -59,7 +63,17 @@ func coverCachePut(dataDir, rawURL string, data []byte, mime string) {
 }
 
 // fetchAndCacheCover 抓取远程封面并写缓存。返回 (data, mime, ok)。
+// 走全局信号量与缓存查询（未进 in-flight 去重——调用方为逐源探测，URL 各异；
+// 同 URL 并发由 coverCachePut 的唯一 tmp 名兜底）。
 func (s *Server) fetchAndCacheCover(rawURL string) ([]byte, string, bool) {
+	// 先查缓存（其他探测协程可能已写入同一封面）
+	if d, m, ok := s.app.coverCacheLookup(rawURL); ok {
+		return d, m, true
+	}
+	if s.app.coverFetchSem != nil {
+		s.app.coverFetchSem <- struct{}{}
+		defer func() { <-s.app.coverFetchSem }()
+	}
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, "", false
@@ -143,13 +157,21 @@ func (s *Server) evictCovers(urls []string) {
 	if len(urls) == 0 {
 		return
 	}
-	// 全库仍在使用的封面 URL 集合
+	// 全库仍在使用的封面 URL 集合（分页遍历：藏书超 1 万时 ListBooks 单页会漏判误删）
 	inUse := map[string]bool{}
-	if all, _, err := s.app.Store.ListBooks("", 10000, 0); err == nil {
+	const pageSize = 5000
+	for offset := 0; ; offset += pageSize {
+		all, _, err := s.app.Store.ListBooks("", pageSize, offset)
+		if err != nil || len(all) == 0 {
+			break
+		}
 		for _, b := range all {
 			if b.CoverURL != "" {
 				inUse[b.CoverURL] = true
 			}
+		}
+		if len(all) < pageSize {
+			break
 		}
 	}
 	// 当前被删书籍已不在库里（或即将删除），逐 URL 判断

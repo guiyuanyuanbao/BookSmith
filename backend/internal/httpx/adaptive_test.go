@@ -28,7 +28,7 @@ func TestAdaptive429Cooling(t *testing.T) {
 
 	c := NewClient()
 	c.retryDelay = 20 * time.Millisecond
-	host := hostOf(srv.URL)
+	host := HostOf(srv.URL)
 
 	// 第一个 Do：连续 429 用尽重试，返回错误但已学习限流
 	_, err := c.Do(context.Background(), &Request{URL: srv.URL})

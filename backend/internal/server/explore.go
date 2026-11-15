@@ -26,11 +26,15 @@ type ExploreJob struct {
 	Err     string
 }
 
-// Snapshot 任务快照（Books 截断保护： discoveries 可能很大，前端分页取）。
+// Snapshot 任务快照（Books/Errs 返回拷贝：并发 GET /api/explore/{id}
+// 各自对共享 slice 做 sort 会数据竞态，必须返回副本）。
 func (j *ExploreJob) Snapshot() (books []*model.ExploreBook, errs []string, running bool, err string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.Books, j.Errs, j.running, j.Err
+	books = make([]*model.ExploreBook, len(j.Books))
+	copy(books, j.Books)
+	errs = append([]string(nil), j.Errs...)
+	return books, errs, j.running, j.Err
 }
 
 // handleExploreSources 列出启用了发现的源 + 各源分类。
@@ -139,6 +143,16 @@ func (s *Server) handleExploreStart(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer cancel()
+		// panic 兜底：job.running 永久 true 会挤占保留名额并让前端永远转圈
+		defer func() {
+			if r := recover(); r != nil {
+				job.mu.Lock()
+				job.Err = fmt.Sprintf("内部异常: %v", r)
+				job.running = false
+				job.mu.Unlock()
+				s.app.Bus.Publish(task.Event{Type: "explore.done", Data: map[string]any{"exploreId": job.ID, "count": 0}})
+			}
+		}()
 		books, errs := s.app.WebBook.Explore(ctx, sources, kinds, req.Page)
 		job.mu.Lock()
 		job.Books = books

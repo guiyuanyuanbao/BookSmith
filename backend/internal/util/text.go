@@ -77,12 +77,14 @@ func SanitizeFileName(name string) string {
 const maxNameBytes = 240
 
 // SafeBookFileName 生成 "书名(作者)" 形式的安全文件主名。
+// 书名/作者各自截断后，**组合结果再按字节截断一次**——ext4 NAME_MAX=255 是
+// 整段文件名的限制，240+1+240 的组合可达 482 字节，Linux 下照样 ENAMETOOLONG。
 func SafeBookFileName(name, author string) string {
 	base := SanitizeFileName(name)
 	if author != "" {
-		return base + "(" + SanitizeFileName(author) + ")"
+		base += "(" + SanitizeFileName(author) + ")"
 	}
-	return base
+	return SanitizeFileName(base) // 组合结果二次字节截断（括号在中间不会被 Trim 掉）
 }
 
 // DecodeHTMLEntities 解码 HTML 实体（&nbsp; 等命名实体与 &#x; 数字实体）。

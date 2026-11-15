@@ -88,9 +88,11 @@ func (s *Store) ListSources(keyword string, enabledFilter int, group string, lim
 		args = append(args, enabledFilter)
 	}
 	if group != "" {
-		// group_name 是逗号分隔多分组串（如「①🔰 正版,②🌸 常用」），子串匹配覆盖任一分组
-		where += ` AND group_name LIKE ?`
-		args = append(args, "%"+group+"%")
+		// 分组精确 token 匹配：group_name 是逗号分隔多分组串（如「①🔰 正版,②🌸 常用」），
+		// 按「,分组,」整 token 匹配——LIKE '%g%' 会把「正版」误匹配「起点正版」等包含关系的分组
+		// （真实语料存在 167 对包含关系，误伤批量禁用/删除）。
+		where += ` AND (',' || group_name || ',') LIKE ?`
+		args = append(args, "%,"+group+",%")
 	}
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM book_sources WHERE `+where, args...).Scan(&total); err != nil {
