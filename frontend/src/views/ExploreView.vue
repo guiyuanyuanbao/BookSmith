@@ -17,6 +17,8 @@ const groupFilter = ref<string[]>([])
 const activeSource = ref('')
 const activeKind = ref('')
 const activeKindTitle = ref('')
+// 分类展开的源（只有展开的源显示分类列表；换源自动切展开）
+const expandedSource = ref('')
 
 // 书籍网格
 const books = ref<ExploreBook[]>([])
@@ -64,10 +66,15 @@ function stopPoll() {
 }
 
 function pickSource(sourceUrl: string) {
-  if (activeSource.value === sourceUrl) return
+  // 已选中 → 再次点击 = 收起/展开分类（不重新加载）
+  if (activeSource.value === sourceUrl) {
+    expandedSource.value = expandedSource.value === sourceUrl ? '' : sourceUrl
+    return
+  }
   const s = sources.value.find((x) => x.sourceUrl === sourceUrl)
   if (!s || !s.kinds.length) return
   activeSource.value = sourceUrl
+  expandedSource.value = sourceUrl // 切源自动展开新源的分类
   // 默认选第一个分类
   activeKind.value = s.kinds[0].url
   activeKindTitle.value = s.kinds[0].title
@@ -188,9 +195,14 @@ onBeforeUnmount(stopPoll)
             <div
               class="explore-source-name"
               :class="{ active: activeSource === s.sourceUrl }"
+              :title="`${s.sourceName}（${s.kinds.length} 个分类，点击选择/收起）`"
               @click="pickSource(s.sourceUrl)"
-            >{{ s.sourceName }}</div>
-            <div v-if="activeSource === s.sourceUrl" class="explore-kinds">
+            >
+              <span class="explore-arrow">{{ expandedSource === s.sourceUrl ? '▾' : '▸' }}</span>
+              <span class="explore-source-text">{{ s.sourceName }}</span>
+              <span class="explore-kind-count">{{ s.kinds.length }}</span>
+            </div>
+            <div v-if="expandedSource === s.sourceUrl" class="explore-kinds">
               <div
                 v-for="k in s.kinds"
                 :key="k.url"
@@ -257,9 +269,21 @@ onBeforeUnmount(stopPoll)
   cursor: pointer;
   font-size: 13.5px;
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.explore-arrow { flex-shrink: 0; width: 12px; color: var(--bs-text-sub, #64748b); font-size: 11px; }
+.explore-source-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explore-kind-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--bs-text-sub, #64748b);
+  background: var(--el-fill-color, #f0f2f5);
+  border-radius: 8px;
+  padding: 0 6px;
+  line-height: 16px;
 }
 .explore-source-name:hover { background: var(--el-fill-color-light, #f5f7fa); }
 .explore-source-name.active { background: var(--el-color-primary-light-9, #ecf5ff); color: var(--el-color-primary); }
