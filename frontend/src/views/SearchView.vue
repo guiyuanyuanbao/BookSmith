@@ -301,7 +301,7 @@ function probeBadge(sourceUrl: string): { label: string; type: 'success' | 'warn
   const maxTotal = Math.max(...totals, 1)
   const origin = pickItem.value?.origins.find((o) => o.sourceUrl === sourceUrl)
   const kindText = (origin?.sourceName ? '' : '') + (pickItem.value?.origins.find((o) => o.sourceUrl === sourceUrl)?.latestChapter || '')
-  const lastMentioned = res.lastChapters.length > 0
+  const lastMentioned = (res.lastChapters?.length ?? 0) > 0
   if (res.total >= maxTotal * 0.9 && lastMentioned) return { label: '· 完整', type: 'success' }
   if (res.total < maxTotal * 0.6) return { label: '· 疑似缺章', type: 'warning' }
   return { label: '· 偏少', type: 'info' }
@@ -817,9 +817,9 @@ onBeforeUnmount(() => {
           </span>
         </div>
         <div class="toc-preview-body">
-          <div v-for="t in probeMap[pickedOrigin.sourceUrl].firstChapters" :key="t" class="toc-line">{{ t }}</div>
-          <div v-if="probeMap[pickedOrigin.sourceUrl].lastChapters.length" class="toc-ellipsis">⋯⋯</div>
-          <div v-for="t in probeMap[pickedOrigin.sourceUrl].lastChapters" :key="'l' + t" class="toc-line">{{ t }}</div>
+          <div v-for="t in probeMap[pickedOrigin.sourceUrl]?.firstChapters ?? []" :key="t" class="toc-line">{{ t }}</div>
+          <div v-if="(probeMap[pickedOrigin.sourceUrl]?.lastChapters ?? []).length" class="toc-ellipsis">⋯⋯</div>
+          <div v-for="t in probeMap[pickedOrigin.sourceUrl]?.lastChapters ?? []" :key="'l' + t" class="toc-line">{{ t }}</div>
         </div>
       </div>
 

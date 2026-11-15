@@ -3,8 +3,10 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,6 +67,56 @@ func probeCachePut(key string, r TocProbeResult) {
 	probeMu.Unlock()
 }
 
+// probeTocResult 探测单源目录质量（单源与批量处理器共用的核心逻辑）。
+// 对齐真实下载路径（fetchToc）：先经详情页解析 ruleBookInfo.tocUrl 得到真实
+// 目录地址（大量源目录与详情页不同页），失败回退 bookUrl——否则探针会把
+// 好源误判成「目录解析为空」。
+func (s *Server) probeTocResult(ctx context.Context, bs *model.BookSource, bookURL string) TocProbeResult {
+	start := time.Now()
+	book := &model.Book{BookURL: bookURL, TocURL: bookURL}
+	if info, err := s.app.WebBook.GetBookInfo(ctx, bs, bookURL); err == nil {
+		if info.TocURL != "" {
+			book.TocURL = info.TocURL
+		}
+	} else if err != nil && bs.RuleBookInfo != nil && strings.TrimSpace(bs.RuleBookInfo.TocURL) != "" {
+		// 完整详情解析失败（如书名规则未配导致「详情解析书名为空」）但 tocUrl
+		// 规则存在：最小化提取目录地址——与真实下载行为对齐的最后一道兜底
+		if toc, terr := s.app.WebBook.ResolveTocURL(ctx, bs, bookURL); terr == nil && toc != "" {
+			book.TocURL = toc
+		}
+	}
+	chapters, tocErr := s.app.WebBook.GetToc(ctx, bs, book)
+	result := TocProbeResult{
+		ProbeMs:       time.Since(start).Milliseconds(),
+		FirstChapters: []string{}, // 初始化非 nil：nil 切片序列化为 null，前端 .length 崩溃（弹窗消失 bug）
+		LastChapters:  []string{},
+	}
+
+	if tocErr != nil {
+		result.Err = tocErr.Error()
+		return result
+	}
+	result.OK = true
+	for _, ch := range chapters {
+		if ch.IsVolume {
+			result.VolumeCount++
+			continue
+		}
+		result.Total++
+		if len(result.FirstChapters) < 5 {
+			result.FirstChapters = append(result.FirstChapters, ch.Title)
+		}
+	}
+	if result.Total > 3 {
+		for i := len(chapters) - 1; i >= 0 && len(result.LastChapters) < 3; i-- {
+			if !chapters[i].IsVolume {
+				result.LastChapters = append([]string{chapters[i].Title}, result.LastChapters...)
+			}
+		}
+	}
+	return result
+}
+
 // handleProbeToc POST /api/probe-toc —— body: {sourceUrl, bookUrl}。
 // 单源拉取目录并返回质量摘要；结果缓存供比源对话框与换源引导共用。
 func (s *Server) handleProbeToc(w http.ResponseWriter, r *http.Request) {
@@ -90,45 +142,21 @@ func (s *Server) handleProbeToc(w http.ResponseWriter, r *http.Request) {
 	}
 	bs := bsAny
 
-	start := time.Now()
-	ctx := r.Context()
-	chapters, tocErr := s.app.WebBook.GetToc(ctx, bs, &model.Book{BookURL: req.BookURL, TocURL: req.BookURL})
-	result := TocProbeResult{ProbeMs: time.Since(start).Milliseconds()}
-
-	if tocErr != nil {
-		result.Err = tocErr.Error()
+	result := s.probeTocResult(r.Context(), bs, req.BookURL)
+	if result.OK {
+		probeCachePut(key, result)
+	} else {
 		// 失败结果缓存更短（2 分钟），源站恢复后可重探
 		probeMu.Lock()
 		probeCache[key] = probeCacheEntry{result: result, expires: time.Now().Add(2 * time.Minute)}
 		probeMu.Unlock()
-		writeOK(w, result)
-		return
 	}
-	result.OK = true
-
-	for _, ch := range chapters {
-		if ch.IsVolume {
-			result.VolumeCount++
-			continue
-		}
-		result.Total++
-		if len(result.FirstChapters) < 5 {
-			result.FirstChapters = append(result.FirstChapters, ch.Title)
-		}
-	}
-	if result.Total > 3 {
-		for i := len(chapters) - 1; i >= 0 && len(result.LastChapters) < 3; i-- {
-			if !chapters[i].IsVolume {
-				result.LastChapters = append([]string{chapters[i].Title}, result.LastChapters...)
-			}
-		}
-	}
-	probeCachePut(key, result)
 	writeOK(w, result)
 }
 
 // handleProbeBatch POST /api/probe-toc/batch —— body: {sources: [{sourceUrl, bookUrl}]}。
 // 并发探测多个源（上限 6 并发），全部返回后按响应时间排序。
+// 探测逻辑与单源一致（probeTocResult：先解析 ruleBookInfo.tocUrl 再取目录）。
 func (s *Server) handleProbeTocBatch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Sources []struct {
@@ -145,8 +173,8 @@ func (s *Server) handleProbeTocBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type item struct {
-		SourceURL string        `json:"sourceUrl"`
-		BookURL   string        `json:"bookUrl"`
+		SourceURL string         `json:"sourceUrl"`
+		BookURL   string         `json:"bookUrl"`
 		Result    TocProbeResult `json:"result"`
 	}
 	out := make([]item, len(req.Sources))
@@ -173,32 +201,15 @@ func (s *Server) handleProbeTocBatch(w http.ResponseWriter, r *http.Request) {
 				out[i].Result = TocProbeResult{Err: "书源不存在"}
 				return
 			}
-			start := time.Now()
-			chapters, tocErr := s.app.WebBook.GetToc(r.Context(), bsAny, &model.Book{BookURL: src.BookURL, TocURL: src.BookURL})
-			result := TocProbeResult{ProbeMs: time.Since(start).Milliseconds()}
-			if tocErr != nil {
-				result.Err = tocErr.Error()
+			result := s.probeTocResult(r.Context(), bsAny, src.BookURL)
+			if result.OK {
+				probeCachePut(key, result)
 			} else {
-				result.OK = true
-				for _, ch := range chapters {
-					if ch.IsVolume {
-						result.VolumeCount++
-						continue
-					}
-					result.Total++
-					if len(result.FirstChapters) < 5 {
-						result.FirstChapters = append(result.FirstChapters, ch.Title)
-					}
-				}
-				if result.Total > 3 {
-					for j := len(chapters) - 1; j >= 0 && len(result.LastChapters) < 3; j-- {
-						if !chapters[j].IsVolume {
-							result.LastChapters = append([]string{chapters[j].Title}, result.LastChapters...)
-						}
-					}
-				}
+				// 失败结果缓存更短（2 分钟），源站恢复后可重探
+				probeMu.Lock()
+				probeCache[key] = probeCacheEntry{result: result, expires: time.Now().Add(2 * time.Minute)}
+				probeMu.Unlock()
 			}
-			probeCachePut(key, result)
 			out[i].Result = result
 		}(i, src)
 	}

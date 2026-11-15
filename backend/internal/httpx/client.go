@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"math/rand"
 	"mime"
@@ -163,18 +164,29 @@ func sniffMetaCharset(peek []byte) (encoding.Encoding, string, bool) {
 	return enc, name, true
 }
 
-// UserAgent 池：覆盖桌面与移动端，降低反爬概率。
+// UserAgent 池：仅桌面 UA。
+// 历史 bug：池内混有移动 UA 且每请求随机——对「按 UA 重定向移动版」的站点
+// （如 sfacg → m.sfacg.com）同一书源的页面结构会在桌面/移动版间随机切换，
+// 为桌面页编写的规则间歇性解析失败（目录/正文随机为空）。
+// 修正：桌面 UA + 按主机确定性选择（同站点恒定同 UA，页面结构稳定）。
 var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
-	"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
-	"Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-	"Mozilla/5.0 (Linux; Android 13; M2102J20SG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
 }
 
-// RandomUA 返回随机 User-Agent。
+// UAForHost 按主机确定性选择 UA（同站点恒定同 UA，避免同源页面结构随机漂移）。
+func UAForHost(host string) string {
+	if host == "" {
+		return userAgents[0]
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(host))
+	return userAgents[int(h.Sum32())%len(userAgents)]
+}
+
+// RandomUA 返回随机 User-Agent（保留：供无主机上下文的调用方使用）。
 func RandomUA() string {
 	return userAgents[rand.Intn(len(userAgents))]
 }

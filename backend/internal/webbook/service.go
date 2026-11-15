@@ -424,6 +424,23 @@ func (s *Service) GetBookInfo(ctx context.Context, bs *model.BookSource, bookURL
 	return book, nil
 }
 
+// ResolveTocURL 最小化提取 ruleBookInfo.tocUrl（请求详情页只解析目录地址）。
+// 与 GetBookInfo 的差异：不要求书名/作者规则成功——部分源未配书名规则导致
+// 完整详情解析必然失败，但 tocUrl（目录在另一页）仍可提取（探针场景实测）。
+func (s *Service) ResolveTocURL(ctx context.Context, bs *model.BookSource, bookURL string) (string, error) {
+	if bs.RuleBookInfo == nil || strings.TrimSpace(bs.RuleBookInfo.TocURL) == "" {
+		return "", fmt.Errorf("书源 %s 未配置 tocUrl 规则", bs.BookSourceName)
+	}
+	body, finalURL, err := s.fetchWithRule(ctx, bs, bookURL, bs.BookSourceURL, 1, "")
+	if err != nil {
+		return "", fmt.Errorf("详情请求失败: %w", err)
+	}
+	ar := s.NewAnalyzeRule(bs, finalURL, nil)
+	ar.SetContent(body, finalURL)
+	ar.SetRedirectURL(finalURL)
+	return ar.GetStringURL(bs.RuleBookInfo.TocURL, nil), nil
+}
+
 func ruleOrEmpty(ri *model.RuleBookInfo, field string) string {
 	if ri == nil {
 		return ""
