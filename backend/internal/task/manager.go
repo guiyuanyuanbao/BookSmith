@@ -694,17 +694,16 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 	}
 
 	// ---- 生成全部成功，现在才替换旧成品 ----
-	// 删旧记录（返回旧文件路径），删旧文件，搬入新文件，登记新记录。
-	// 各步骤间窗口极小（毫秒级）且失败时走 reAdd 恢复磁盘上仍在的文件登记。
+	// MkdirAll 提前（幂等无副作用）：删旧成品后唯一允许的失败是 rename，
+	// 而 rename 失败有 reAdd 恢复路径——确保任何失败都不丢旧成品。
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		return "", fmt.Errorf("创建导出目录失败: %w", err)
+	}
 	oldPaths, _ := m.st.DeleteExportsByBook(book.ID)
 	for _, p := range oldPaths {
 		if p != "" {
 			_ = os.Remove(p)
 		}
-	}
-	if err := os.MkdirAll(finalDir, 0o755); err != nil {
-		m.reAddExports(taskID, book.ID, oldPaths)
-		return "", err
 	}
 	finalPaths := make([]string, 0, len(staged))
 	for _, sf := range staged {
@@ -839,6 +838,11 @@ func (m *Manager) Cancel(id int64) error {
 	if t.Status == model.TaskDone || t.Status == model.TaskCanceled {
 		return nil
 	}
+	// exporting 阶段不可取消：doExport 不接收 ctx，取消请求无人消费——
+	// 返回成功会让用户误以为已取消而任务照常完成（与 Pause 守卫对齐）
+	if t.Status == model.TaskExporting {
+		return fmt.Errorf("任务正在导出，不可取消")
+	}
 	m.mu.Lock()
 	m.cancelReq[id] = true
 	tc, running := m.running[id]
@@ -847,7 +851,11 @@ func (m *Manager) Cancel(id int64) error {
 		tc.cancel()
 		return nil
 	}
-	// 非运行态（paused/failed/pending 未调度）：直接落终态，否则标志无人消费、任务永远卡住
+	// pending 未调度但 run goroutine 可能即将消费 cancelReq：置标志后落终态由 run 检查
+	if t.Status == model.TaskPending {
+		return nil // cancelReq 已置位，run 在阶段检查点落 canceled
+	}
+	// 非运行态（paused/failed）：直接落终态，否则标志无人消费、任务永远卡住
 	if t.Status == model.TaskPaused || t.Status == model.TaskFailed {
 		t.Status = model.TaskCanceled
 		_ = m.st.UpdateTask(t)

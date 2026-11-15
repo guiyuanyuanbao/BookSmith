@@ -17,10 +17,10 @@ let closeSSE: (() => void) | null = null
 const settings = useSettingsStore()
 const viewMode = ref<'grid' | 'list'>(settings.bookView)
 
-// 切换视图并记住偏好
+// 切换视图并记住偏好（本地即时生效；后端同步失败不打断交互）
 function switchView(v: 'grid' | 'list') {
   viewMode.value = v
-  settings.save({ bookView: v })
+  settings.save({ bookView: v }).catch(() => {})
 }
 const sortBy = ref<'recent' | 'name' | 'progress'>('recent')
 
@@ -41,35 +41,47 @@ function openGroupPanel(g: BookGroup) {
   groupDlg.value = true
 }
 
+// 抽屉内异步请求序号：快速切换来源时，慢响应不得覆盖新来源的数据
+let drawerReqSeq = 0
+
 /** 在抽屉内查看某源的导出文件 */
 async function viewSourceExports(sb: SourceBook) {
+  const req = ++drawerReqSeq
   groupActiveSource.value = sb
   groupView.value = 'exports'
   groupExportsLoading.value = true
   try {
-    groupExports.value = (await api.listExports(100, sb.id)) ?? []
+    const r = (await api.listExports(100, sb.id)) ?? []
+    if (req !== drawerReqSeq) return // 已切换到其他来源/视图，丢弃陈旧响应
+    groupExports.value = r
   } catch (e: any) {
+    if (req !== drawerReqSeq) return
     ElMessage.error(e.message)
   } finally {
-    groupExportsLoading.value = false
+    if (req === drawerReqSeq) groupExportsLoading.value = false
   }
 }
 
 /** 在抽屉内查看某源目录 */
 async function viewSourceToc(sb: SourceBook) {
+  const req = ++drawerReqSeq
   groupActiveSource.value = sb
   groupView.value = 'toc'
   groupTocLoading.value = true
   try {
-    groupChapters.value = (await api.bookToc(sb.id)) ?? []
+    const r = (await api.bookToc(sb.id)) ?? []
+    if (req !== drawerReqSeq) return // 已切换到其他来源/视图，丢弃陈旧响应
+    groupChapters.value = r
   } catch (e: any) {
+    if (req !== drawerReqSeq) return
     ElMessage.error(e.message)
   } finally {
-    groupTocLoading.value = false
+    if (req === drawerReqSeq) groupTocLoading.value = false
   }
 }
 
 function backToSources() {
+  drawerReqSeq++ // 使在途响应失效
   groupView.value = 'sources'
   groupActiveSource.value = null
 }
@@ -182,22 +194,28 @@ function selectAll() {
 
 async function batchRemove() {
   if (!selected.value.length) return
+  // 先在当前分组里展开为全部来源 bookId（被 SSE 刷新删掉的书静默跳过）
+  const ids: number[] = []
+  const removedBooks: number[] = []
+  for (const g of groups.value) {
+    if (selected.value.includes(g.primary.id)) {
+      removedBooks.push(g.primary.id)
+      for (const s of g.sources) ids.push(s.id)
+    }
+  }
+  if (!ids.length) {
+    selected.value = []
+    return
+  }
   try {
-    await ElMessageBox.confirm(`批量移除选中的 ${selected.value.length} 本书（含全部来源的缓存）？`, '批量移除', {
+    await ElMessageBox.confirm(`批量移除选中的 ${removedBooks.length} 本书（含全部来源的缓存）？`, '批量移除', {
       type: 'warning', confirmButtonText: '移除',
     })
   } catch { return }
   try {
-    // 展开为该书全部来源的 bookId
-    const ids: number[] = []
-    for (const g of groups.value) {
-      if (selected.value.includes(g.primary.id)) {
-        for (const s of g.sources) ids.push(s.id)
-      }
-    }
     await api.batchBooks('remove', ids)
-    ElMessage.success(`已移除 ${selected.value.length} 本（${ids.length} 个源记录）`)
-    selected.value = []
+    ElMessage.success(`已移除 ${removedBooks.length} 本（${ids.length} 个源记录）`)
+    selected.value = selected.value.filter((id) => !removedBooks.includes(id))
     batchMode.value = false
     load()
   } catch (e: any) {
@@ -270,6 +288,16 @@ function openExports(sb: SourceBook) {
 // 下载/续传（按源）：创建/复用任务并加入全局浮窗跟踪
 async function continueSource(sb: SourceBook) {
   try {
+    // 已暂停的任务：恢复而非新建（后端去重不认 paused，直接 bookDownload
+    // 会创建第二个任务，旧 paused 任务残留并可演变为同书双流水线）
+    const lt = sb.stats?.lastTask
+    if (lt?.status === 'paused') {
+      await api.resumeTask(lt.id)
+      ElMessage.success(`任务 #${lt.id} 已恢复`)
+      await load()
+      syncDrawerTarget()
+      return
+    }
     const r = await api.bookDownload(sb.id, {
       formats: [...settings.defaultFormats],
       concurrency: settings.concurrency,
@@ -370,16 +398,31 @@ function syncDrawerTarget() {
   }
 }
 
+// 搜索框防抖：每键触发全量分组查询过重，且响应乱序会覆盖新关键词结果
+let keywordTimer: number | null = null
+function onKeywordInput() {
+  if (keywordTimer !== null) clearTimeout(keywordTimer)
+  keywordTimer = window.setTimeout(() => {
+    keywordTimer = null
+    load()
+  }, 300)
+}
+
 /** 拉取书架分组；silent=true 用于轮询/事件刷新，不触发骨架屏（避免闪烁卡顿） */
-async function load(silent = false) {
+let loadSeq = 0
+async function load(silent = false) {  const seq = ++loadSeq
   if (!silent) loading.value = true
   try {
     const r = await api.listBookGroups(keyword.value || undefined)
+    if (seq !== loadSeq) return // 已有更新的请求在途（快速输入时旧响应晚到会覆盖新结果）
     groups.value = r.items ?? []
+    // 后台刷新后重定位打开中的抽屉，避免抽屉数据冻结在旧对象上
+    syncDrawerTarget()
   } catch (e: any) {
+    if (seq !== loadSeq) return
     if (!silent) ElMessage.error(e.message)
   } finally {
-    if (!silent) loading.value = false
+    if (seq === loadSeq && !silent) loading.value = false
   }
 }
 
@@ -509,7 +552,7 @@ onBeforeUnmount(() => {
     <p class="page-sub">同一本书的多来源聚合展示：每个来源独立缓存与进度，可换源续传或分别导出</p>
 
     <div class="toolbar">
-      <el-input v-model="keyword" placeholder="搜索书名/作者" style="width: 200px" clearable @input="load" />
+      <el-input v-model="keyword" placeholder="搜索书名/作者" style="width: 200px" clearable @input="onKeywordInput" />
       <el-select v-model="sortBy" style="width: 120px">
         <el-option value="recent" label="最近更新" />
         <el-option value="name" label="书名" />

@@ -852,7 +852,7 @@ func (s *Store) TasksByBook(bookID int64) ([]*model.DownloadTask, error) {
 	return out, rows.Err()
 }
 
-// ActiveTaskByBook 某书的活动任务（running/pending/exporting，最新优先），无则 nil。
+// ActiveTaskByBook 某书的活动任务（running/pending/exporting/paused，最新优先），无则 nil。
 func (s *Store) ActiveTaskByBook(bookID int64) (*model.DownloadTask, error) {
 	tasks, err := s.TasksByBook(bookID)
 	if err != nil {
@@ -860,7 +860,9 @@ func (s *Store) ActiveTaskByBook(bookID int64) (*model.DownloadTask, error) {
 	}
 	for _, t := range tasks {
 		switch t.Status {
-		case model.TaskRunning, model.TaskPending, model.TaskExporting:
+		case model.TaskRunning, model.TaskPending, model.TaskExporting, model.TaskPaused:
+			// paused 也算活动任务：书架"续传"对 paused 任务走 Resume 而非新建，
+			// 避免同书出现两条任务记录（可演变为双流水线交叉写章节）
 			return t, nil
 		}
 	}

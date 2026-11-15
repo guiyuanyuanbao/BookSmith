@@ -31,7 +31,7 @@ const defaults: SettingsState = {
   concurrency: 6,
   defaultFormats: ['txt', 'epub'],
   bookView: 'grid',
-  probeBatchSize: 6,
+  probeBatchSize: 12,
   probeMaxSources: 36,
   probeStopHealthy: 3,
 }
@@ -139,6 +139,10 @@ export const useSettingsStore = defineStore('settings', () => {
       concurrency: String(state.value.concurrency),
       defaultFormats: state.value.defaultFormats.join(','),
       bookView: state.value.bookView,
+      // 探测三项必须同步到后端：漏掉会导致刷新时被后端默认值静默重置（历史 bug）
+      probeBatchSize: String(state.value.probeBatchSize),
+      probeMaxSources: String(state.value.probeMaxSources),
+      probeStopHealthy: String(state.value.probeStopHealthy),
     })
   }
 

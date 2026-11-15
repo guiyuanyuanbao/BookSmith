@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"booksmith/internal/export"
 	"booksmith/internal/model"
 	"booksmith/internal/task"
 )
@@ -29,6 +30,13 @@ func (s *Server) handleExportNow(w http.ResponseWriter, r *http.Request) {
 	if len(req.Formats) == 0 {
 		req.Formats = []string{"txt", "epub"}
 	}
+	// 与 handleCreateTask 一致：无效格式提前 400
+	for _, f := range req.Formats {
+		if !export.ValidFormat(f) {
+			writeErr(w, 400, "不支持的导出格式: "+f)
+			return
+		}
+	}
 	bookAny, err := s.app.Store.GetBook(id)
 	if err != nil {
 		writeErr(w, 404, "书籍不存在")
@@ -36,9 +44,10 @@ func (s *Server) handleExportNow(w http.ResponseWriter, r *http.Request) {
 	}
 	book := bookAny
 
-	// 有活动任务（running/pending/exporting）时禁止并发导出：
-	// doExport 会 removeOldExports 清旧成品，与流水线导出并发会互删对方刚写的文件
-	if at, aerr := s.app.Store.ActiveTaskByBook(id); aerr == nil {
+	// 有活动任务（running/pending）时禁止并发导出。paused 放行：任务不写章节，
+	// 且 doExport 已按 bookID 串行化 + 暂存原子替换，无并发风险（回归修复：
+	// paused 纳入 ActiveTaskByBook 后曾误拦缓存完整书籍的合法导出）
+	if at, aerr := s.app.Store.ActiveTaskByBook(id); aerr == nil && at.Status != model.TaskPaused {
 		writeErr(w, 409, "任务 #"+fmt.Sprint(at.ID)+" 进行中（"+model.TaskStatusName(at.Status)+"），完成后再导出")
 		return
 	}

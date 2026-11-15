@@ -142,3 +142,8 @@ func trunc(s string, n int) string {
 	}
 	return s
 }
+
+// DebugFetch 测试辅助：走 fetchWithRule 同款路径拉取页面文本。
+func (s *Service) DebugFetch(ctx context.Context, bs *model.BookSource, ruleURL, baseURL string) (string, string, error) {
+	return s.fetchWithRule(ctx, bs, ruleURL, baseURL, 1, "")
+}

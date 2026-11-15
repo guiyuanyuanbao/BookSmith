@@ -113,12 +113,13 @@ async function showFailures(t: DownloadTask) {
   }
 }
 
+let progressTimer: number | null = null
+
 onMounted(() => {
   load()
   timer = window.setInterval(load, 2500)
   // progress 事件每章触发一次（高并发下每秒多个），全量 load 会造成渲染风暴；
   // 进度由 2.5s 轮询兜底，这里只对终态事件立即刷新
-  let progressTimer: number | null = null
   closeSSE = subscribeEvents({
     onTaskProgress: () => {
       if (progressTimer !== null) return // 节流：progress 风暴下 2s 最多刷一次
@@ -134,6 +135,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer)
+  if (progressTimer) window.clearTimeout(progressTimer)
   closeSSE?.()
 })
 </script>

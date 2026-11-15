@@ -1,7 +1,7 @@
 <!-- 下载任务浮窗：挂在 App 级别，任何页面都持续可见。 -->
 <!-- 实时进度 / 失败详情 / 一键换源重下（换源跳回搜索页并复用结果）。 -->
 <script setup lang="ts">
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useTasksStore } from '@/stores/tasks'
 import { useRouter } from 'vue-router'
@@ -28,6 +28,17 @@ function statusView(s: string) {
 
 async function action(tid: number, act: 'pause' | 'resume' | 'cancel') {
   try {
+    // 取消与任务页一致加确认（误点会终止长时间下载，断点语义已变）
+    if (act === 'cancel') {
+      const d = store.activeDownloads[tid]
+      try {
+        await ElMessageBox.confirm(`取消《${d?.name ?? ''}》的下载？已缓存章节保留，可随时恢复。`, '确认取消', {
+          type: 'warning', confirmButtonText: '取消下载', cancelButtonText: '继续下载',
+        })
+      } catch {
+        return // 用户放弃取消
+      }
+    }
     await (act === 'pause' ? api.pauseTask(tid) : act === 'resume' ? api.resumeTask(tid) : api.cancelTask(tid))
     await store.refresh()
   } catch (e: any) {
@@ -72,13 +83,13 @@ function switchSource(tid: number) {
           <div v-if="d.failChapters" class="muted" style="font-size: 12px">失败章节 {{ d.failChapters }} 章</div>
         </div>
         <div class="dl-item-ops">
-          <template v-if="d.status === 'running' || d.status === 'exporting'">
+          <template v-if="d.status === 'running'">
             <el-button size="small" link @click="action(d.tid, 'pause')">暂停</el-button>
           </template>
           <template v-else-if="d.status === 'paused'">
             <el-button size="small" link type="primary" @click="action(d.tid, 'resume')">恢复</el-button>
           </template>
-          <template v-if="['running', 'exporting', 'paused'].includes(d.status)">
+          <template v-if="['running', 'paused'].includes(d.status)">
             <el-button size="small" link type="danger" @click="action(d.tid, 'cancel')">取消</el-button>
           </template>
           <template v-if="['failed', 'canceled'].includes(d.status)">

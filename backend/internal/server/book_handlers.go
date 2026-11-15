@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"booksmith/internal/export"
 	"booksmith/internal/model"
 )
 
@@ -45,6 +46,13 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Formats) == 0 {
 		req.Formats = []string{"txt", "epub"}
+	}
+	// 与 handleCreateTask 一致：无效格式提前 400（否则任务跑完全流水线后才发现无法导出）
+	for _, f := range req.Formats {
+		if !export.ValidFormat(f) {
+			writeErr(w, 400, "不支持的导出格式: "+f)
+			return
+		}
 	}
 	bookAny, err := s.app.Store.GetBook(id)
 	if err != nil {

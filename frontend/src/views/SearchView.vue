@@ -139,6 +139,10 @@ async function doSearch() {
     ElMessage.warning('请输入书名或作者')
     return
   }
+  if (loading.value) {
+    ElMessage.warning('当前搜索仍在进行中，请等待完成或取消')
+    return
+  }
   started.value = true
   loading.value = true
   job.value = null
@@ -422,20 +426,25 @@ function dlTagText(s: string) {
   }
 }
 
-// 多源封面 fallback：item.coverUrl 优先，其次各 origin 的封面
+// 多源封面 fallback：item.coverUrl 优先，其次各 origin 的封面。
+// triedCovers 统一记录【原始】封面 URL（img.src 是代理后的绝对地址，直接存会导致
+// 键不匹配 → 同一失败地址被反复设置 → 对 /api/cover 无限重试，历史 bug）。
 const triedCovers = new Set<string>()
 function bestCover(item: SearchResult): string | null {
-  if (item.coverUrl) return item.coverUrl
+  if (item.coverUrl && !triedCovers.has(item.coverUrl)) return item.coverUrl
   for (const o of item.origins) {
     if (o.coverUrl && !triedCovers.has(o.coverUrl)) return o.coverUrl
   }
   return null
 }
-// 封面加载失败：标记已试，换下一个源的封面
+// 封面加载失败：标记已试（原始 URL），换下一个源的封面
 function coverFallback(item: SearchResult, ev: Event) {
   const img = ev.target as HTMLImageElement
   const cur = img.src
-  triedCovers.add(cur)
+  // 反查当前 src 对应的原始封面 URL（img.src 是 coverProxy 包装后的地址）
+  const hit = item.origins.map((o) => o.coverUrl).find((u) => u && coverProxy(u) === cur)
+  triedCovers.add(hit || cur)
+  if (item.coverUrl) triedCovers.add(item.coverUrl)
   const next = item.origins.map((o) => o.coverUrl).find((u) => u && !triedCovers.has(u))
   if (next) {
     img.src = coverProxy(next)

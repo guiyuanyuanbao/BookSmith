@@ -15,7 +15,7 @@ type BookStats struct {
 	DoneChapters    int `json:"doneChapters"`
 	FailedChapters  int `json:"failedChapters"`
 	PendingChapters int `json:"pendingChapters"`
-	// 活动任务（running/pending/exporting 中最新的一个），无则为 null
+	// 活动任务（running/pending/exporting/paused 中最新的一个），无则为 null
 	ActiveTask *ActiveTaskInfo `json:"activeTask,omitempty"`
 	// 最近一次任务（无论状态）
 	LastTask *ActiveTaskInfo `json:"lastTask,omitempty"`
@@ -60,7 +60,8 @@ func (s *Server) computeBookStats(bookID int64) (*BookStats, error) {
 			ErrMsg: t.ErrMsg, ExportPath: t.ExportPath,
 		}
 		switch t.Status {
-		case model.TaskRunning, model.TaskPending, model.TaskExporting:
+		case model.TaskRunning, model.TaskPending, model.TaskExporting, model.TaskPaused:
+			// paused 属活动任务：书架徽章可显示「已暂停」，前端自动刷新分支可用
 			if stats.ActiveTask == nil {
 				stats.ActiveTask = info
 			}

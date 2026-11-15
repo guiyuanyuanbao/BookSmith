@@ -14,6 +14,8 @@ const router = createRouter({
     { path: '/tasks', name: 'tasks', component: () => import('@/views/TasksView.vue'), meta: { title: '下载任务' } },
     { path: '/files', name: 'files', component: () => import('@/views/FilesView.vue'), meta: { title: '导出文件' } },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { title: '登录' } },
+    // 未注册路径回概览（避免侧栏正常但内容区空白）
+    { path: '/:pathMatch(.*)*', redirect: '/overview' },
   ],
 })
 

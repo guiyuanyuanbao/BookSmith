@@ -376,7 +376,10 @@ export function subscribeEvents(handlers: {
   const bind = (name: string, fn?: (d: any) => void) => {
     es.addEventListener(name, (e) => {
       try {
-        fn?.(JSON.parse((e as MessageEvent).data))
+        // 后端 data: 字段是完整 Event JSON（{type, taskId, data:{...}, time}），
+        // 业务载荷嵌在 data 里——解包后合并 taskId/type 到顶层供处理器匹配
+        const ev = JSON.parse((e as MessageEvent).data)
+        fn?.({ ...(ev?.data ?? {}), taskId: ev?.taskId, type: ev?.type })
       } catch {
         /* 忽略坏帧 */
       }

@@ -70,18 +70,23 @@ export const useTasksStore = defineStore('tasks', () => {
     } catch { /* 忽略 */ }
   }
 
-  /** SSE 事件按书名同步（搜索页等已订阅场景外，这里兜底） */
-  function applyEvent(d: { bookName?: string; done?: number; total?: number; status?: string }) {
+  /** SSE 事件同步：优先按 taskId 精确匹配（同书多源下载存在同名条目），无 taskId 时按书名兜底 */
+  function applyEvent(d: { taskId?: number; bookName?: string; done?: number; total?: number; status?: string }) {
+    const apply = (tid: number, info: DlTaskInfo) => {
+      activeDownloads.value[tid] = {
+        ...info,
+        done: d.done ?? info.done,
+        total: d.total ?? info.total,
+        status: d.status ?? info.status,
+      }
+    }
+    if (d.taskId != null && activeDownloads.value[d.taskId]) {
+      apply(d.taskId, activeDownloads.value[d.taskId])
+      return
+    }
     if (!d.bookName) return
     for (const [tid, info] of Object.entries(activeDownloads.value)) {
-      if (info.name === d.bookName) {
-        activeDownloads.value[Number(tid)] = {
-          ...info,
-          done: d.done ?? info.done,
-          total: d.total ?? info.total,
-          status: d.status ?? info.status,
-        }
-      }
+      if (info.name === d.bookName) apply(Number(tid), info)
     }
   }
 
