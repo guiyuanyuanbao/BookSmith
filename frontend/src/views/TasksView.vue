@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, subscribeEvents, type Chapter, type DownloadTask } from '@/api'
+import StatusPill from '@/components/StatusPill.vue'
 
 const tasks = ref<DownloadTask[]>([])
 const filterTab = ref<'all' | 'active' | 'done'>('all')
@@ -9,16 +10,6 @@ const loading = ref(false)
 let timer: number | null = null
 let closeSSE: (() => void) | null = null
 const startTimes = new Map<number, number>()
-
-const statusMap: Record<string, { text: string; type: string }> = {
-  pending: { text: '等待中', type: 'info' },
-  running: { text: '下载中', type: 'primary' },
-  paused: { text: '已暂停', type: 'warning' },
-  exporting: { text: '导出中', type: 'warning' },
-  done: { text: '已完成', type: 'success' },
-  failed: { text: '失败', type: 'danger' },
-  canceled: { text: '已取消', type: 'info' },
-}
 
 const phaseText = (t: DownloadTask) => {
   if (t.status === 'running' || t.status === 'pending') {
@@ -271,32 +262,6 @@ onBeforeUnmount(() => {
 .tc-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .tc-ops { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
-/* 状态胶囊：彩点 + 文字 */
-.tc-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--el-fill-color-light);
-  flex-shrink: 0;
-}
-.tc-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bs-text-sub); }
-.tc-status.running .dot, .tc-status.exporting .dot { background: var(--bs-primary); animation: pulse 1.4s ease infinite; }
-.tc-status.running, .tc-status.exporting { color: var(--bs-primary); }
-.tc-status.paused .dot { background: var(--bs-accent); }
-.tc-status.paused { color: var(--bs-accent); }
-.tc-status.done .dot { background: var(--bs-success); }
-.tc-status.done { color: var(--bs-success); }
-.tc-status.failed .dot { background: var(--bs-danger); }
-.tc-status.failed { color: var(--bs-danger); }
-.tc-status.canceled .dot { background: var(--bs-text-sub); }
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
 .tc-id { position: absolute; right: 14px; top: 10px; font-size: 11px; }
 .task-card { position: relative; }
 </style>

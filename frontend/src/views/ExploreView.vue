@@ -352,19 +352,8 @@ onBeforeUnmount(stopPoll)
 }
 .explore-card { cursor: pointer; min-width: 0; }
 .explore-card:hover .explore-card-name { color: var(--el-color-primary); }
-.cover {
-  width: 100%;
-  aspect-ratio: 3/4;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--el-fill-color, #f0f2f5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 6px;
-}
-.cover img { width: 100%; height: 100%; object-fit: cover; }
-.cover-ph { color: #fff; font-size: 22px; }
+/* 封面与书名的间距（旧 .cover 的 margin-bottom，CoverThumb 化后在此补回） */
+.explore-card :deep(.cover-thumb) { margin-bottom: 6px; }
 .explore-card-name {
   font-size: 13px;
   font-weight: 600;

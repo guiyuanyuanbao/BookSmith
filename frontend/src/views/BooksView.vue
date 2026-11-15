@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, coverProxy, subscribeEvents, withKey, type BookGroup, type Chapter, type SourceBook } from '@/api'
 import FmtTag from '@/components/FmtTag.vue'
+import { phColor } from '@/composables/formatters'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 import { useRouter } from 'vue-router'
@@ -423,7 +424,9 @@ async function load(silent = false) {  const seq = ++loadSeq
     if (seq !== loadSeq) return
     if (!silent) ElMessage.error(e.message)
   } finally {
-    if (seq === loadSeq && !silent) loading.value = false
+    // silent 请求从不置 loading=true，故最新请求无条件清除即可；
+    // 若更新的请求在途则 seq !== loadSeq，由其自身 finally 清除
+    if (seq === loadSeq) loading.value = false
   }
 }
 
@@ -452,13 +455,8 @@ function downloadViaSearch(name: string, author: string) {
   router.push({ path: '/search', query: { pick: name, author } })
 }
 
-// 无封面柔和底色
-const phColors = ['#7fa89a', '#a58f7a', '#8f9a7a', '#9a7a8f', '#7a8f9a']
-function phColor(name: string) {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff
-  return phColors[h % phColors.length]
-}
+// 无封面柔和底色（与全局共享同一套散列色板）
+
 
 // 封面地址：手动上传（/api/books/{id}/cover）优先于远程 CoverURL（代理）
 // t 参数取 updatedAt，更换封面后立即失效缓存

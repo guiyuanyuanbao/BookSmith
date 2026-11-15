@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Search, VideoPause, CircleCheckFilled } from '@element-plus/icons-vue'
 import { api, coverProxy, subscribeEvents, type BookSource, type SearchJobState, type SearchOrigin, type SearchResult } from '@/api'
 import { fmtMs } from '@/composables/formatters'
@@ -226,7 +226,7 @@ async function onPickDialogOpen() {
 
 function startProbe(manual = false) {
   if (!pickItem.value) return
-  return probe.start(pickItem.value.name, pickItem.value.origins, manual)
+  return probe.start(pickItem.value.origins, manual)
 }
 
 function stopProbe() {

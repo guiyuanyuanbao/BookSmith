@@ -66,6 +66,10 @@ export const useSettingsStore = defineStore('settings', () => {
       root.style.setProperty('--bs-border', '#3a4048')
       root.style.setProperty('--el-bg-color', '#2b3037')
       root.style.setProperty('--el-bg-color-page', '#22262c')
+      // 弹层（select 下拉/datepicker/messagebox 等浮层）专用背景，缺省白色在暗色下刺眼
+      root.style.setProperty('--el-bg-color-overlay', '#2b3037')
+      root.style.setProperty('--el-border-color-lighter', '#3a4048')
+      root.style.setProperty('--el-text-color-secondary', '#9a968c')
       root.style.setProperty('--el-text-color-primary', '#e6e3dc')
       root.style.setProperty('--el-text-color-regular', '#c9c5bc')
       root.style.setProperty('--el-fill-color', '#333941')
@@ -95,6 +99,10 @@ export const useSettingsStore = defineStore('settings', () => {
       root.style.setProperty('--bs-border', '#ece8df')
       root.style.setProperty('--el-bg-color', '#ffffff')
       root.style.setProperty('--el-bg-color-page', preset.bg)
+      // 恢复弹层变量（暗色主题设置的 inline 变量会残留，需显式复位）
+      root.style.setProperty('--el-bg-color-overlay', '#ffffff')
+      root.style.setProperty('--el-border-color-lighter', '#ece8df')
+      root.style.setProperty('--el-text-color-secondary', '#8a8578')
       root.style.setProperty('--el-text-color-primary', '#2c2a26')
       root.style.setProperty('--el-text-color-regular', '#5c5850')
       root.style.setProperty('--el-fill-color', '#f4f1ea')

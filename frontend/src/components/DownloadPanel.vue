@@ -15,18 +15,6 @@ function percent(d: { done: number; total: number }) {
   return Math.min(100, Math.round((d.done / d.total) * 100))
 }
 
-function statusView(s: string) {
-  switch (s) {
-    case 'running': return { text: '下载中', type: 'primary' as const }
-    case 'exporting': return { text: '导出中', type: 'warning' as const }
-    case 'paused': return { text: '已暂停', type: 'info' as const }
-    case 'done': return { text: '已完成', type: 'success' as const }
-    case 'failed': return { text: '失败', type: 'danger' as const }
-    case 'canceled': return { text: '已取消', type: 'info' as const }
-    default: return { text: s, type: 'info' as const }
-  }
-}
-
 async function action(tid: number, act: 'pause' | 'resume' | 'cancel') {
   try {
     // 取消与任务页一致加确认（误点会终止长时间下载，断点语义已变）

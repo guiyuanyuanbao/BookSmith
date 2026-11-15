@@ -8,7 +8,7 @@ import { useSettingsStore } from '@/stores/settings'
  * - 首次探测按健康阈值即停（probeStopHealthy），或达 probeMaxSources 上限
  * - 「继续探测」从上次游标接续，不受阈值限制，探完剩余全部
  * - 支持随时停止（立即生效，不等整批结束）
- * - reset(bookKey) 在换书时清空状态
+ * - reset() 在换书时清空状态（含已探结果与游标）
  *
  * 抽为 composable：比源对话框与（未来的）换源引导共用同一套状态机。
  */
@@ -38,7 +38,7 @@ export function useProbe() {
     probeDone.value = 0
   }
 
-  async function start(bookKey: string, origins: { sourceUrl: string; bookUrl: string; respondTime?: number }[], manual = false) {
+  async function start(origins: { sourceUrl: string; bookUrl: string; respondTime?: number }[], manual = false) {
     if (probing.value) return
     const all = [...origins].sort((a, b) => (a.respondTime || 9999) - (b.respondTime || 9999))
     if (!all.length) return

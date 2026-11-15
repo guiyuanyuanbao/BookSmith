@@ -3,7 +3,7 @@
 import { onMounted, ref, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
-import { fmtSize, fmtColor, FORMAT_COLORS } from '@/composables/formatters'
+import { fmtSize, FORMAT_COLORS } from '@/composables/formatters'
 import FmtTag from '@/components/FmtTag.vue'
 import { useTasksStore } from '@/stores/tasks'
 
