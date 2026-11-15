@@ -27,6 +27,8 @@ const exploreErr = ref('')
 const page = ref(1)
 let exploreId = ''
 let pollTimer: number | null = null
+// 本次加载是否为追加模式（pollOnce 落地结果时按此决定覆盖还是合并）
+let pendingAppend = false
 
 const allGroups = computed(() => {
   const set = new Set<string>()
@@ -81,6 +83,7 @@ function pickSource(sourceUrl: string) {
   books.value = []
   exploreErr.value = ''
   page.value = 1
+  pendingAppend = false
   loadBooks(1, false)
 }
 
@@ -91,6 +94,7 @@ function pickKind(kindUrl: string, kindTitle: string) {
   books.value = []
   exploreErr.value = ''
   page.value = 1
+  pendingAppend = false
   loadBooks(1, false)
 }
 
@@ -102,23 +106,40 @@ async function pollOnce() {
     stopPoll()
     loadingBooks.value = false
     if (r.err) {
-      exploreErr.value = r.err
+      // 追加加载失败不清空已有内容，仅在网格为空时显示错误
+      if (!pendingAppend || !books.value.length) {
+        exploreErr.value = r.err
+      }
       return
     }
-    books.value = r.books ?? []
-    if (r.errors?.length && (r.books ?? []).length === 0) {
-      exploreErr.value = r.errors.slice(0, 3).join('; ')
+    if (pendingAppend) {
+      // 追加：按 bookUrl 去重后接在已有书之后（部分源第 2 页会重复末尾条目）
+      const seen = new Set(books.value.map((b) => b.bookUrl))
+      for (const b of r.books ?? []) {
+        if (!seen.has(b.bookUrl)) books.value.push(b)
+      }
+      if (!books.value.length) {
+        exploreErr.value = '该分类没有更多内容了'
+      }
+    } else {
+      books.value = r.books ?? []
+      if (r.errors?.length && (r.books ?? []).length === 0) {
+        exploreErr.value = r.errors.slice(0, 3).join('; ')
+      }
     }
+    pendingAppend = false
   } catch {
     stopPoll()
     loadingBooks.value = false
+    pendingAppend = false
   }
 }
 
 async function loadBooks(p: number, append: boolean) {
   if (!activeSource.value || !activeKind.value) return
   loadingBooks.value = true
-  exploreErr.value = ''
+  pendingAppend = append
+  if (!append) exploreErr.value = ''
   try {
     const r = await api.exploreStart({
       sourceUrls: [activeSource.value],
@@ -220,10 +241,8 @@ onBeforeUnmount(stopPoll)
         <div v-if="activeSource" style="margin-bottom: 12px; display: flex; align-items: center; gap: 10px">
           <strong>{{ activeKindTitle || '选择分类' }}</strong>
           <span class="muted" style="font-size: 12px">{{ books.length ? `已加载 ${books.length} 本` : '' }}</span>
-          <div class="spacer" />
-          <el-button size="small" :loading="loadingBooks" :disabled="!activeKind" @click="loadMore">加载更多</el-button>
         </div>
-        <div v-if="exploreErr" style="color: var(--el-color-danger); font-size: 13px; margin-bottom: 12px">
+        <div v-if="exploreErr && !books.length" style="color: var(--el-color-danger); font-size: 13px; margin-bottom: 12px">
           {{ exploreErr }}
         </div>
         <div v-if="loadingBooks && !books.length" class="muted" style="text-align: center; padding: 40px 0">
@@ -245,6 +264,16 @@ onBeforeUnmount(stopPoll)
             <div class="muted" style="font-size: 12px">{{ b.author || '未知' }}</div>
             <el-tag size="small" type="info" class="explore-card-src">{{ b.sourceName }}</el-tag>
           </div>
+        </div>
+        <!-- 加载更多：在所有书之后（网格底部），追加失败也不清空已有内容 -->
+        <div v-if="books.length" class="explore-more">
+          <div v-if="exploreErr" class="muted" style="font-size: 12px; margin-bottom: 8px">{{ exploreErr }}</div>
+          <el-button
+            size="default"
+            :loading="loadingBooks"
+            :disabled="!activeKind"
+            @click="loadMore"
+          >加载更多</el-button>
         </div>
       </div>
     </div>
@@ -304,6 +333,10 @@ onBeforeUnmount(stopPoll)
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   gap: 14px;
+}
+.explore-more {
+  text-align: center;
+  padding: 24px 0 40px;
 }
 .explore-card { cursor: pointer; min-width: 0; }
 .explore-card:hover .explore-card-name { color: var(--el-color-primary); }
