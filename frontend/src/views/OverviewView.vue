@@ -1,21 +1,38 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, type Overview } from '@/api'
+import { useRouter } from 'vue-router'
 
+const router = useRouter()
 const data = ref<Overview | null>(null)
 const loading = ref(false)
 
-// 任务状态英文键 → 中文标签
 const taskStatusLabels: Record<string, string> = {
   pending: '等待中', running: '进行中', paused: '已暂停', done: '已完成',
   failed: '失败', canceled: '已取消', exporting: '导出中',
 }
-const statusLabel = (st: string) => taskStatusLabels[st] ?? st
 
 function fmtSize(n: number) {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+/** 进行中任务数（running/pending/exporting） */
+const activeCount = computed(() => {
+  if (!data.value) return 0
+  const by = data.value.tasks.byStatus
+  return (by.running ?? 0) + (by.pending ?? 0) + (by.exporting ?? 0)
+})
+
+/** 书架缓存进度百分比 */
+const cachedPct = computed(() => {
+  if (!data.value || !data.value.books.totalChapters) return 0
+  return Math.round((data.value.books.cachedChapters / data.value.books.totalChapters) * 100)
+})
+
+function go(path: string) {
+  router.push(path)
 }
 
 async function load() {
@@ -38,91 +55,151 @@ export default {}
 </script>
 
 <template>
-  <div class="page">
-    <h1 class="page-title">概览</h1>
-    <p class="page-sub">书源健康、书架缓存、任务与导出的一览统计</p>
+  <div class="page home">
+    <section class="hero" v-loading="loading">
+      <div class="hero-text">
+        <h1>书籍工坊</h1>
+        <p>把网文一键做成精排电子书 —— 书源、下载与导出，一站完成</p>
+      </div>
+      <div v-if="data" class="hero-stats">
+        <button class="hstat" @click="go('/sources')">
+          <span class="hstat-num">{{ data.sources.total }}</span>
+          <span class="hstat-label">书源</span>
+          <span class="hstat-sub">可用 {{ data.sources.verified }}</span>
+        </button>
+        <button class="hstat" @click="go('/books')">
+          <span class="hstat-num">{{ data.books.count }}</span>
+          <span class="hstat-label">书架</span>
+          <span class="hstat-sub">已缓存 {{ cachedPct }}%</span>
+        </button>
+        <button class="hstat" @click="go('/tasks')">
+          <span class="hstat-num">{{ activeCount }}</span>
+          <span class="hstat-label">进行中</span>
+          <span class="hstat-sub">共 {{ data.tasks.recent }} 个任务</span>
+        </button>
+        <button class="hstat" @click="go('/files')">
+          <span class="hstat-num">{{ data.exports.count }}</span>
+          <span class="hstat-label">成品</span>
+          <span class="hstat-sub">{{ fmtSize(data.exports.totalSize) }}</span>
+        </button>
+      </div>
+    </section>
 
-    <div v-loading="loading" style="min-height: 300px">
-      <template v-if="data">
-        <div class="stat-grid">
-          <!-- 书源 -->
-          <div class="stat-card">
-            <div class="stat-head">📖 书源</div>
-            <div class="stat-num">{{ data.sources.total }}</div>
-            <div class="stat-rows">
-              <div class="stat-row"><span>已启用</span><b>{{ data.sources.enabled }}</b></div>
-              <div class="stat-row"><span>已禁用</span><b>{{ data.sources.disabled }}</b></div>
-              <div class="stat-row"><span style="color: var(--bs-success)">校验可用</span><b style="color: var(--bs-success)">{{ data.sources.verified }}</b></div>
-              <div class="stat-row"><span style="color: var(--bs-danger)">校验异常</span><b style="color: var(--bs-danger)">{{ data.sources.abnormal }}</b></div>
-            </div>
-            <router-link to="/sources"><el-button size="small" style="width:100%">管理书源</el-button></router-link>
-          </div>
+    <section class="launchers">
+      <button class="launcher" @click="go('/search')">
+        <span class="l-icon">🔍</span>
+        <span class="l-body">
+          <span class="l-title">搜索新书</span>
+          <span class="l-desc">聚合 2600+ 书源，一键比源下载</span>
+        </span>
+        <span class="l-arrow">→</span>
+      </button>
+      <button class="launcher" @click="go('/books')">
+        <span class="l-icon">📚</span>
+        <span class="l-body">
+          <span class="l-title">我的书架</span>
+          <span class="l-desc">多源缓存与续传，成品导出管理</span>
+        </span>
+        <span class="l-arrow">→</span>
+      </button>
+      <button class="launcher" @click="go('/explore')">
+        <span class="l-icon">🧭</span>
+        <span class="l-body">
+          <span class="l-title">发现榜单</span>
+          <span class="l-desc">按书源浏览分类榜单，挑书更直观</span>
+        </span>
+        <span class="l-arrow">→</span>
+      </button>
+    </section>
 
-          <!-- 书架 -->
-          <div class="stat-card">
-            <div class="stat-head">📚 书架</div>
-            <div class="stat-num">{{ data.books.count }}</div>
-            <div class="stat-rows">
-              <div class="stat-row"><span>章节总数</span><b>{{ data.books.totalChapters }}</b></div>
-              <div class="stat-row"><span>已缓存章节</span><b style="color: var(--bs-primary)">{{ data.books.cachedChapters }}</b></div>
-            </div>
-            <router-link to="/books"><el-button size="small" style="width:100%">打开书架</el-button></router-link>
-          </div>
-
-          <!-- 任务 -->
-          <div class="stat-card">
-            <div class="stat-head">⬇️ 任务</div>
-            <div class="stat-num">{{ data.tasks.recent }}</div>
-            <div class="stat-rows">
-              <div class="stat-row" v-for="(n, st) in data.tasks.byStatus" :key="st">
-                <span>{{ statusLabel(String(st)) }}</span><b>{{ n }}</b>
-              </div>
-            </div>
-            <router-link to="/tasks"><el-button size="small" style="width:100%">查看任务</el-button></router-link>
-          </div>
-
-          <!-- 导出 -->
-          <div class="stat-card">
-            <div class="stat-head">📦 导出</div>
-            <div class="stat-num">{{ data.exports.count }}</div>
-            <div class="stat-rows">
-              <div class="stat-row"><span>总大小</span><b>{{ fmtSize(data.exports.totalSize) }}</b></div>
-              <div class="stat-row" v-for="(n, f) in data.exports.byFormat" :key="f">
-                <span style="text-transform: uppercase">{{ f }}</span><b>{{ n }}</b>
-              </div>
-            </div>
-            <router-link to="/files"><el-button size="small" style="width:100%">查看导出</el-button></router-link>
-          </div>
-        </div>
-      </template>
-    </div>
+    <p class="home-foot muted" v-if="data">
+      导出成品共 {{ data.exports.count }} 份（{{ fmtSize(data.exports.totalSize) }}）· 任务记录 {{ data.tasks.recent }} 条
+    </p>
   </div>
 </template>
 
 <style scoped>
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 20px;
+.home { padding-top: 40px; }
+
+/* Hero：墨绿渐变 + 玻璃质感统计 */
+.hero {
+  background:
+    radial-gradient(ellipse 90% 120% at 90% -20%, rgba(126, 190, 164, 0.35), transparent),
+    linear-gradient(135deg, #1c362e 0%, #2f6f5e 65%, #3d8a75 100%);
+  border-radius: 22px;
+  padding: 34px 38px 30px;
+  color: #f5f2ea;
+  box-shadow: 0 10px 32px rgba(28, 54, 46, 0.28);
+  margin-bottom: 22px;
 }
-.stat-card {
+.hero-text h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.hero-text p {
+  margin: 8px 0 22px;
+  color: rgba(245, 242, 234, 0.82);
+  font-size: 14px;
+}
+.hero-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.hstat {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 14px 18px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background 0.2s ease, transform 0.2s ease;
+  backdrop-filter: blur(4px);
+}
+.hstat:hover { background: rgba(255, 255, 255, 0.18); transform: translateY(-2px); }
+.hstat-num { font-size: 26px; font-weight: 700; color: #fff; line-height: 1.1; }
+.hstat-label { font-size: 12.5px; color: rgba(245, 242, 234, 0.9); }
+.hstat-sub { font-size: 11px; color: rgba(245, 242, 234, 0.55); }
+
+/* 快捷启动器 */
+.launchers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.launcher {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   background: var(--bs-card);
   border: 1px solid var(--bs-border);
   border-radius: var(--bs-radius);
-  padding: 20px;
+  padding: 18px 20px;
+  cursor: pointer;
+  text-align: left;
   box-shadow: var(--bs-shadow);
-  display: flex;
-  flex-direction: column;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
-.stat-head { font-size: 13px; color: var(--bs-text-sub); margin-bottom: 6px; }
-.stat-num { font-size: 36px; font-weight: 700; color: var(--bs-primary); margin-bottom: 10px; font-family: 'Noto Serif SC', serif; }
-.stat-rows { flex: 1; margin-bottom: 14px; }
-.stat-row {
-  display: flex; justify-content: space-between;
-  padding: 4px 0; font-size: 13px;
-  color: var(--bs-text-sub);
-  border-bottom: 1px dashed var(--bs-border);
+.launcher:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--bs-shadow-hover);
 }
-.stat-row:last-child { border-bottom: none; }
-.stat-row b { color: var(--bs-text); }
+.launcher:hover .l-arrow { transform: translateX(4px); }
+.l-icon { font-size: 26px; }
+.l-body { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.l-title { font-size: 15px; font-weight: 600; color: var(--bs-text); }
+.l-desc { font-size: 12.5px; color: var(--bs-text-sub); }
+.l-arrow { color: var(--bs-text-sub); transition: transform 0.2s ease; }
+
+.home-foot { text-align: center; margin-top: 26px; }
+
+@media (max-width: 760px) {
+  .hero-stats { grid-template-columns: repeat(2, 1fr); }
+  .launchers { grid-template-columns: 1fr; }
+}
 </style>

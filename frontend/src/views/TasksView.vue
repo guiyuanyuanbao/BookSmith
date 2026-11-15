@@ -153,83 +153,63 @@ onBeforeUnmount(() => {
       <div class="spacer" />
       <el-button size="small" @click="clearFinished" :disabled="!hasFinished">清空已完成/已取消</el-button>
     </div>
-    <el-table :data="filteredTasks" v-loading="loading" style="width: 100%">
-      <el-table-column prop="id" label="#" width="60" />
-      <el-table-column label="书籍" min-width="170">
-        <template #default="{ row }">
-          <strong>{{ row.bookName }}</strong>
-          <div class="muted">
-            {{ row.author }}
-            <el-link type="primary" :underline="false" style="font-size: 12px" @click="$router.push('/books')">
-              书架
-            </el-link>
+
+    <div class="task-list" v-loading="loading">
+      <div v-for="row in filteredTasks" :key="row.id" class="task-card">
+        <div class="tc-main">
+          <div class="tc-title-row">
+            <strong class="tc-name">{{ row.bookName }}</strong>
+            <span class="tc-author muted">{{ row.author }}</span>
+            <el-tag v-for="f in row.formats" :key="f" size="small" class="tc-fmt">{{ f.toUpperCase() }}</el-tag>
+            <span class="tc-status" :class="row.status">
+              <i class="dot" />{{ statusMap[row.status]?.text ?? row.status }}
+            </span>
           </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="格式" width="130">
-        <template #default="{ row }">
-          <el-tag v-for="f in row.formats" :key="f" size="small" style="margin-right: 4px">{{ f.toUpperCase() }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="进度" min-width="210">
-        <template #default="{ row }">
           <el-progress
             :percentage="pct(row)"
             :status="row.failChapters > 0 ? 'warning' : undefined"
-            :stroke-width="14"
-            text-inside
+            :stroke-width="10"
+            :show-text="false"
+            class="tc-progress"
           />
-          <div class="muted">
-            {{ row.doneChapters }}/{{ row.totalChapters }}
-            <template v-if="row.failChapters > 0"> · 失败 {{ row.failChapters }}</template>
-            <template v-if="speedOf(row)"> · {{ speedOf(row) }}</template>
+          <div class="tc-meta muted">
+            <span>{{ row.doneChapters }}/{{ row.totalChapters }} 章</span>
+            <span v-if="row.failChapters > 0" class="tc-fail">失败 {{ row.failChapters }}</span>
+            <span v-if="speedOf(row)">{{ speedOf(row) }}</span>
+            <span v-if="phaseText(row)">{{ phaseText(row) }}</span>
+            <el-tooltip v-if="row.errMsg" :content="row.errMsg" placement="top" :show-after="300">
+              <span class="tc-err">{{ row.errMsg }}</span>
+            </el-tooltip>
           </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="110">
-        <template #default="{ row }">
-          <el-tag :type="(statusMap[row.status]?.type as any) ?? 'info'">
-            {{ statusMap[row.status]?.text ?? row.status }}
-          </el-tag>
-          <div v-if="phaseText(row)" class="muted" style="margin-top: 2px">{{ phaseText(row) }}</div>
-          <el-tooltip v-if="row.errMsg" :content="row.errMsg" placement="top" :show-after="300">
-            <div class="muted" style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-              {{ row.errMsg }}
-            </div>
-          </el-tooltip>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="260">
-        <template #default="{ row }">
-          <el-button v-if="row.status === 'running' || row.status === 'pending'" size="small" @click="action(row, 'pause')">
+        </div>
+        <div class="tc-ops">
+          <el-button v-if="row.status === 'running' || row.status === 'pending'" size="small" round @click="action(row, 'pause')">
             暂停
           </el-button>
           <el-button
             v-if="row.status === 'paused' || row.status === 'failed'"
-            size="small"
-            type="primary"
+            size="small" type="primary" round
             @click="action(row, 'resume')"
           >
             恢复
           </el-button>
-          <el-button v-if="row.failChapters > 0" size="small" type="warning" @click="action(row, 'retry')">
+          <el-button v-if="row.failChapters > 0" size="small" type="warning" plain round @click="action(row, 'retry')">
             重跑失败
           </el-button>
-          <el-button v-if="row.failChapters > 0" size="small" link type="warning" @click="showFailures(row)">
+          <el-button v-if="row.failChapters > 0" size="small" round @click="showFailures(row)">
             详情
           </el-button>
           <el-button
             v-if="!['done', 'canceled'].includes(row.status)"
-            size="small"
-            type="danger"
-            plain
+            size="small" type="danger" plain round
             @click="action(row, 'cancel')"
           >
             取消
           </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+        </div>
+        <div class="tc-id muted">#{{ row.id }}</div>
+      </div>
+    </div>
 
     <el-empty v-if="!loading && tasks.length === 0" description="暂无任务 — 从搜索或书架发起下载" />
 
@@ -254,3 +234,71 @@ onBeforeUnmount(() => {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.task-list { display: flex; flex-direction: column; gap: 14px; }
+.task-card {
+  background: var(--bs-card);
+  border: 1px solid var(--bs-border);
+  border-radius: var(--bs-radius);
+  padding: 18px 22px;
+  box-shadow: var(--bs-shadow);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  transition: box-shadow 0.2s ease;
+}
+.task-card:hover { box-shadow: var(--bs-shadow-hover); }
+.tc-main { flex: 1; min-width: 0; }
+.tc-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.tc-name { font-size: 15px; }
+.tc-author { font-size: 12.5px; }
+.tc-fmt { flex-shrink: 0; }
+.tc-progress { max-width: 460px; }
+.tc-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.tc-fail { color: var(--bs-danger); }
+.tc-err {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
+.tc-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.tc-ops { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* 状态胶囊：彩点 + 文字 */
+.tc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--el-fill-color-light);
+  flex-shrink: 0;
+}
+.tc-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bs-text-sub); }
+.tc-status.running .dot, .tc-status.exporting .dot { background: var(--bs-primary); animation: pulse 1.4s ease infinite; }
+.tc-status.running, .tc-status.exporting { color: var(--bs-primary); }
+.tc-status.paused .dot { background: var(--bs-accent); }
+.tc-status.paused { color: var(--bs-accent); }
+.tc-status.done .dot { background: var(--bs-success); }
+.tc-status.done { color: var(--bs-success); }
+.tc-status.failed .dot { background: var(--bs-danger); }
+.tc-status.failed { color: var(--bs-danger); }
+.tc-status.canceled .dot { background: var(--bs-text-sub); }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.tc-id { position: absolute; right: 14px; top: 10px; font-size: 11px; }
+.task-card { position: relative; }
+</style>
