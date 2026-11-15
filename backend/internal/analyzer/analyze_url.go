@@ -531,6 +531,65 @@ func jsonUnmarshalLoose(b []byte, v any) error {
 	return json.Unmarshal([]byte(s), v)
 }
 
+// bareKeyRe 匹配 { 或 , 之后的裸标识符键（GSON lenient 接受、encoding/json 拒绝）。
+// 只处理字符串字面量之外的区域，避免误改 URL 值内部偶然出现的 ",word:" 形态。
+var bareKeyRe = regexp.MustCompile(`([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:`)
+
+// trailingCommaRe 匹配数组/对象末尾的逗号（legado 源常见笔误）。
+var trailingCommaRe = regexp.MustCompile(`,\s*([}\]])`)
+
+// gsonLenient 按 Java GSON lenient 模式的接受范围解析 JSON：
+// 严格解析 → 单引号值替换 → 裸键补引号（字符串感知）→ 尾逗号清理 → 再解析。
+// legado 书源 JSON 大量使用单引号值与无引号键（GSON 原生接受），encoding/json 严格拒绝。
+func gsonLenient(b []byte, v any) error {
+	if err := json.Unmarshal(b, v); err == nil {
+		return nil
+	}
+	s := strings.ReplaceAll(string(b), "'", `"`)
+	s = quoteBareJSONKeys(s)
+	s = trailingCommaRe.ReplaceAllString(s, `$1`)
+	return json.Unmarshal([]byte(s), v)
+}
+
+// quoteBareJSONKeys 给 JSON 裸键补引号。字符串感知：逐字节扫描，
+// 只对字符串字面量之外的区域应用裸键正则——字符串内部（如 URL 值里的
+// ",word:"）原样保留。UTF-8 多字节序列不含 0x22/0x5C 字节，逐字节扫描安全。
+func quoteBareJSONKeys(s string) string {
+	var sb strings.Builder
+	i, n := 0, len(s)
+	segStart := 0 // 当前"字符串之外"区域的起点
+	inStr := false
+	for i < n {
+		if inStr {
+			if s[i] == '\\' && i+1 < n {
+				i += 2 // 跳过转义对
+				continue
+			}
+			if s[i] == '"' {
+				sb.WriteString(s[segStart:i+1]) // 字符串字面量原样拷贝
+				i++
+				segStart = i
+				inStr = false
+				continue
+			}
+			i++
+			continue
+		}
+		if s[i] == '"' {
+			// 进入字符串前：把之前的非字符串区域做裸键补引号
+			sb.WriteString(bareKeyRe.ReplaceAllString(s[segStart:i], `$1"$2":`))
+			segStart = i
+			inStr = true
+			i++
+			continue
+		}
+		i++
+	}
+	// 末尾非字符串区域
+	sb.WriteString(bareKeyRe.ReplaceAllString(s[segStart:], `$1"$2":`))
+	return sb.String()
+}
+
 // ExploreKind 发现页分类（exploreUrl 解析产物）。
 type ExploreKind struct {
 	Title string `json:"title"`
@@ -560,10 +619,10 @@ func AnalyzeExploreKinds(ruleURL, baseURL string, source BookSourceRef, js JSEng
 	expanded := au.analyzeJsMulti(ruleURL)
 	expanded = strings.TrimSpace(expanded)
 
-	// 形态 2：JSON 数组
+	// 形态 2：JSON 数组（GSON-lenient：单引号值/裸键/尾逗号宽容）
 	if strings.HasPrefix(expanded, "[") {
 		var raw []map[string]any
-		if jsonUnmarshalLoose([]byte(expanded), &raw) == nil {
+		if gsonLenient([]byte(expanded), &raw) == nil {
 			out := make([]ExploreKind, 0, len(raw))
 			for _, m := range raw {
 				title, _ := m["title"].(string)
@@ -601,8 +660,12 @@ func AnalyzeExploreKinds(ruleURL, baseURL string, source BookSourceRef, js JSEng
 	if len(out) > 0 {
 		return out
 	}
-	// 形态 4：纯 URL 兜底（含 ,{options} 尾缀——URL 整体保留）
-	if expanded != "" && strings.Contains(expanded, "/") {
+	// 形态 4：纯 URL 兜底（含 ,{options} 尾缀——URL 整体保留）。
+	// 收紧：内容以 [ 或 { 开头（明显是 JSON 结构）却解析失败时不再伪装成
+	// 「全部分类」URL——那会产生一个点击必炸的假分类（GSON 宽松 JSON 击穿
+	// 解析器的历史 bug）。
+	if expanded != "" && !strings.HasPrefix(expanded, "[") && !strings.HasPrefix(expanded, "{") &&
+		strings.Contains(expanded, "/") {
 		return []ExploreKind{{Title: "全部分类", URL: expanded}}
 	}
 	return nil

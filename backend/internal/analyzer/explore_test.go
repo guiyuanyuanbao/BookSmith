@@ -82,4 +82,64 @@ func TestAnalyzeExploreKinds_PureURLFallback(t *testing.T) {
 	if !strings.Contains(kinds[0].URL, "/latest/") {
 		t.Fatalf("URL 应保留: %+v", kinds[0])
 	}
+	// JSON 结构开头却解析失败 → 不再伪装成假 URL 分类（历史 bug：
+	// GSON 宽松 JSON 击穿解析器后被兜底成「全部分类」，点击必炸）
+	broken := `[{'title':'x','url':'/a'},` // 截断的非法 JSON
+	if kinds := AnalyzeExploreKinds(broken, "http://example.com", &mockSourceRef{}, nil, nil); kinds != nil {
+		t.Fatalf("坏 JSON 不应产生假 URL 分类: %+v", kinds)
+	}
+}
+
+// TestAnalyzeExploreKinds_GSONLenient 海棠/废文网形：单引号值 + 全裸键 +
+// 裸 style 子键（GSON lenient 语法，encoding/json 严格拒绝）。
+func TestAnalyzeExploreKinds_GSONLenient(t *testing.T) {
+	rule := "[{title:'我的书柜',url:'/?act=managemybookcase&pages=1',style:{layout_flexGrow: 1,layout_flexBasisPercent:1}},\n" +
+		"{title:'百合分类',url:'/?act=searchlist&selbooktype=all&page=1',style:{layout_flexGrow: 1}},\n" +
+		"{title:'已完结',url:'/?act=searchlist&selbookpoststats=b&page=1',style:{layout_flexGrow: 1}}]"
+	kinds := AnalyzeExploreKinds(rule, "http://example.com", &mockSourceRef{}, nil, nil)
+	if len(kinds) != 3 {
+		t.Fatalf("GSON 宽松 JSON 应解析 3 个分类，实际 %d: %+v", len(kinds), kinds)
+	}
+	if kinds[0].Title != "我的书柜" || kinds[0].URL != "/?act=managemybookcase&pages=1" {
+		t.Fatalf("首分类错误: %+v", kinds[0])
+	}
+}
+
+// TestAnalyzeExploreKinds_LenientMixed 青花鱼形：首个严格双引号项 url 为空
+// （应过滤）+ 其余单引号裸键项（应解析）。
+func TestAnalyzeExploreKinds_LenientMixed(t *testing.T) {
+	rule := `[{"title":"分类","url":""},{title:'现代',url:'/forum.php?mod=forumdisplay&fid=4&page=1',style:{layout_flexgrow: 1}},` +
+		"{title:'古风',url:'/forum.php?fid=2&page=1',style:{layout_flexgrow: 1}}]"
+	kinds := AnalyzeExploreKinds(rule, "http://example.com", &mockSourceRef{}, nil, nil)
+	if len(kinds) != 2 {
+		t.Fatalf("url 为空项应过滤，实际 %d: %+v", len(kinds), kinds)
+	}
+	if kinds[0].Title != "现代" {
+		t.Fatalf("首分类错误: %+v", kinds[0])
+	}
+}
+
+// TestAnalyzeExploreKinds_TrailingComma 尾逗号容忍（legado 源常见笔误）。
+func TestAnalyzeExploreKinds_TrailingComma(t *testing.T) {
+	rule := `[{"title":"玄幻","url":"/xh/{{page}}.html"},{"title":"都市","url":"/ds/{{page}}.html"},]`
+	kinds := AnalyzeExploreKinds(rule, "http://example.com", &mockSourceRef{}, nil, nil)
+	if len(kinds) != 2 {
+		t.Fatalf("尾逗号应容忍，实际 %d: %+v", len(kinds), kinds)
+	}
+}
+
+// TestQuoteBareJSONKeys_SkipsStringContents 裸键补引号不得误改字符串值内部
+//（如 URL 值里偶然出现的 ",word:" 形态）。
+func TestQuoteBareJSONKeys_SkipsStringContents(t *testing.T) {
+	in := `{"url":"/a?b=1,c:d,e:f","title":"含,冒号:的值"}`
+	out := quoteBareJSONKeys(in)
+	if out != in {
+		t.Fatalf("字符串内容不应被改动:\n in:  %s\n out: %s", in, out)
+	}
+	// 裸键在字符串外被正确补引号
+	in2 := `{title:'x',url:'/y'}`
+	out2 := quoteBareJSONKeys(strings.ReplaceAll(in2, "'", `"`))
+	if out2 != `{"title":"x","url":"/y"}` {
+		t.Fatalf("裸键补引号错误: %s", out2)
+	}
 }
