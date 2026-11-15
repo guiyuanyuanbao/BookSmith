@@ -4,6 +4,7 @@
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import { useTasksStore } from '@/stores/tasks'
+import StatusPill from '@/components/StatusPill.vue'
 import { useRouter } from 'vue-router'
 
 const store = useTasksStore()
@@ -67,7 +68,7 @@ function switchSource(tid: number) {
       <div v-for="d in store.entries" :key="d.tid" class="dl-item">
         <div class="dl-item-top">
           <strong class="dl-item-name" :title="d.name">{{ d.name }}</strong>
-          <el-tag size="small" :type="statusView(d.status).type">{{ statusView(d.status).text }}</el-tag>
+          <StatusPill :status="d.status" />
         </div>
         <div class="dl-item-src muted">
           {{ d.originName || d.origin || '—' }}<template v-if="d.author"> · {{ d.author }}</template>
