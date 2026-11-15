@@ -91,8 +91,10 @@ func (s *Store) ListSources(keyword string, enabledFilter int, group string, lim
 		// 分组精确 token 匹配：group_name 是逗号分隔多分组串（如「①🔰 正版,②🌸 常用」），
 		// 按「,分组,」整 token 匹配——LIKE '%g%' 会把「正版」误匹配「起点正版」等包含关系的分组
 		// （真实语料存在 167 对包含关系，误伤批量禁用/删除）。
-		where += ` AND (',' || group_name || ',') LIKE ?`
-		args = append(args, "%,"+group+",%")
+		// 两侧同去空格：SourceGroups() 列出的分组名已 TrimSpace，group_name 逗号后可能带空格，
+		// 不归一会让下拉可选的分组在筛选时恒为空。
+		where += ` AND (',' || REPLACE(group_name, ' ', '') || ',') LIKE ?`
+		args = append(args, "%,"+strings.ReplaceAll(group, " ", "")+",%")
 	}
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM book_sources WHERE `+where, args...).Scan(&total); err != nil {
@@ -452,8 +454,10 @@ func (s *Store) ListBooks(keyword string, limit, offset int) ([]*model.Book, int
 	where := "1=1"
 	args := []any{}
 	if keyword != "" {
-		where += ` AND (name LIKE ? OR author LIKE ?)`
-		kw := "%" + keyword + "%"
+		// LIKE 通配符转义：书名含 %/_ 时裸关键词会破坏匹配语义（如 "%" 命中全部）
+		esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+		where += ` AND (name LIKE ? ESCAPE '\' OR author LIKE ? ESCAPE '\')`
+		kw := "%" + esc + "%"
 		args = append(args, kw, kw)
 	}
 	var total int
@@ -704,6 +708,16 @@ func (s *Store) CountChapterStatus(bookID int64) (total, done, failed int, err e
 		COALESCE(SUM(CASE WHEN status=2 THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN status=3 THEN 1 ELSE 0 END), 0)
 		FROM chapters WHERE book_id=? AND is_volume=0`, bookID).Scan(&total, &done, &failed)
+	return
+}
+
+// CountChapterStatusRange 区间口径统计（区间下载进度条用）。
+func (s *Store) CountChapterStatusRange(bookID int64, start, end int64) (total, done, failed int, err error) {
+	err = s.db.QueryRow(`SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN status=2 THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN status=3 THEN 1 ELSE 0 END), 0)
+		FROM chapters WHERE book_id=? AND is_volume=0 AND idx BETWEEN ? AND ?`,
+		bookID, start, end).Scan(&total, &done, &failed)
 	return
 }
 

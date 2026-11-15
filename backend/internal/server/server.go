@@ -40,12 +40,12 @@ func writeOK(w http.ResponseWriter, v any) {
 	writeJSON(w, http.StatusOK, map[string]any{"isSuccess": true, "data": v})
 }
 
-// readJSON 解析请求体。
+// readJSON 解析请求体（32MB 上限：书源批量导入是最大合法载荷，防投喂撑内存）。
 func readJSON(r *http.Request, v any) error {
 	if r.Body == nil {
 		return errors.New("请求体为空")
 	}
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 32<<20))
 	return dec.Decode(v)
 }
 

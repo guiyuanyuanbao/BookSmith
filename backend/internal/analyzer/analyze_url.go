@@ -381,7 +381,8 @@ func (au *AnalyzeUrl) evalJS(jsStr string, result any) any {
 	if au.source != nil {
 		bindings["source"] = au.source
 	}
-	v, err := au.js.Eval(jsStr, bindings)
+	// 同 analyze_rule_exec：JS 看门狗防书源死循环
+	v, err := au.js.EvalWithTimeout(jsStr, bindings, 30*time.Second)
 	if err != nil {
 		return ""
 	}

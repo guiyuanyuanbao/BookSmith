@@ -135,15 +135,16 @@ async function loadHistory() {
   } catch { /* 忽略 */ }
 }
 
-async function doSearch() {
+/** 发起搜索。返回 false 表示被空关键词/loading 守卫拒绝（调用方据此回滚 pending 状态） */
+async function doSearch(): Promise<boolean> {
   const key = keyword.value.trim()
   if (!key) {
     ElMessage.warning('请输入书名或作者')
-    return
+    return false
   }
   if (loading.value) {
     ElMessage.warning('当前搜索仍在进行中，请等待完成或取消')
-    return
+    return false
   }
   started.value = true
   loading.value = true
@@ -175,11 +176,13 @@ async function doSearch() {
     api.addSearchHistory(key).then(() => loadHistory()).catch(() => {})
     startPolling()
     await poll()
+    return true
   } catch (e: any) {
     ElMessage.error(e.message)
     loading.value = false
     closeSSE?.()
     closeSSE = null
+    return false
   }
 }
 
@@ -324,7 +327,11 @@ function reswitchFromQuery(name: string, author: string, exclude: string, failed
   // 本页没有该书结果（刚进入页面）：先搜索，完成后自动打开换源对话框
   keyword.value = name
   pendingReswitch.value = { name, exclude }
-  doSearch()
+  if (!doSearch()) {
+    // 被重入守卫拒绝（已有搜索在途）：回滚 pending，防止那次无关搜索完成时按错误书名消费
+    pendingReswitch.value = null
+    ElMessage.warning('当前有搜索进行中，请等待完成后重试换源')
+  }
 }
 
 const pendingReswitch = ref<{ name: string; exclude: string } | null>(null)
@@ -412,7 +419,11 @@ watch(
       } else {
         keyword.value = name
         pendingPick.value = name
-        doSearch()
+        if (!doSearch()) {
+          // 被重入守卫拒绝：回滚 pending，防止在途搜索完成时按错误书名消费
+          pendingPick.value = null
+          ElMessage.warning('当前有搜索进行中，请等待完成后重试')
+        }
       }
     }
   },

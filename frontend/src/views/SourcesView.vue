@@ -63,6 +63,7 @@ const visibleProviders = computed(() =>
 const yioveProvider = computed(() => providers.value.find((p) => p.key === 'yiove'))
 
 async function loadYioveList(page = 1) {
+  yioveSearchMode.value = false // 手动点「全部书源」类入口时退出搜索模式
   const meta = yioveProvider.value?.sourceList
   if (!meta) return
   yioveListLoading.value = true
@@ -76,10 +77,14 @@ async function loadYioveList(page = 1) {
   }
 }
 
+// 搜索模式标记：分页控件按此分发（搜索结果翻页若拉全量列表会静默替换搜索结果）
+const yioveSearchMode = ref(false)
+
 async function doYioveSearch(page = 1) {
   const meta = yioveProvider.value?.sourceList
   if (!meta || !yioveSearchKeyword.value.trim()) return
   yioveSearching.value = true
+  yioveSearchMode.value = true
   try {
     yioveListData.value = await api.yioveSearch(meta.apiBase, yioveSearchKeyword.value.trim(), yioveSearchType.value, page, 20)
     yioveListPage.value = page
@@ -89,6 +94,12 @@ async function doYioveSearch(page = 1) {
   } finally {
     yioveSearching.value = false
   }
+}
+
+/** 分页翻页：按当前模式分发到全量列表 / 搜索结果 */
+function onYiovePageChange(page: number) {
+  if (yioveSearchMode.value) doYioveSearch(page)
+  else loadYioveList(page)
 }
 
 /** 导入 yiove 单源列表某页（序号段直链 → 异步同步任务） */
@@ -130,29 +141,32 @@ async function importSelectedYioveSources() {
   const meta = yioveProvider.value?.sourceList
   if (!meta) return
   for (const item of list) {
+    // 走 syncRepo：负责置 syncJob + 启动轮询（直调 syncRepoStart 会让等待条件恒真、并发打满）
     try {
-      await api.syncRepoStart({
-        url: `${meta.apiBase}/import/book-source/${item.id}`,
-        name: `Yiove·${item.name}`,
-        kind: 'bookSource',
-      })
+      await syncRepo(
+        { name: `Yiove·${item.name}`, url: `${meta.apiBase}/import/book-source/${item.id}`, kind: 'bookSource', provider: 'yiove' },
+        false,
+      )
     } catch (e: any) {
       ElMessage.error(`${item.name}: ${e.message}`)
       continue
     }
-    // 等当前任务完成再继续
+    if (!syncJob.value?.progress.running) continue // syncRepo 被重入守卫拒绝（已有任务）时直接跳到下一个
+    // 等当前任务完成再继续（卸载后中止，防 interval 泄漏）
     await new Promise<void>((resolve) => {
       const t = setInterval(() => {
-        if (!syncJob.value?.progress.running) {
+        if (!cleanupAlive || !syncJob.value?.progress.running) {
           clearInterval(t)
           resolve()
         }
       }, 500)
     })
   }
-  ElMessage.success(`已批量导入 ${list.length} 个书源`)
-  selectedYioveSources.value = []
-  load()
+  if (cleanupAlive) {
+    ElMessage.success(`已批量导入 ${list.length} 个书源`)
+    selectedYioveSources.value = []
+    load()
+  }
 }
 
 /** 导入搜索结果页（用当前列表页序号段不行——搜索结果是过滤后的，直接拉同一页号不精确）
@@ -224,6 +238,8 @@ const cleanupResult = ref<{
 const cleanupProgress = ref<{ checked: number; total: number; dead: number; alive: number; disabled: number; deleted: number } | null>(null)
 let cleanupId = ''
 let closeCleanupSSE: (() => void) | null = null
+// 组件存活标志：清理/批量同步的长轮询循环在卸载后全部中止
+let cleanupAlive = true
 
 async function runCleanup() {
   cleaning.value = true
@@ -240,9 +256,10 @@ async function runCleanup() {
   try {
     const start = await api.cleanupStart({ scope: cleanupScope.value, mode: cleanupMode.value })
     cleanupId = start.cleanupId
-    // 轮询进度直至完成
+    // 轮询进度直至完成（卸载后中止，避免离开页面仍每 800ms 打接口 + SSE 挂着）
     for (;;) {
       await new Promise((r) => setTimeout(r, 800))
+      if (!cleanupAlive) break
       const st = await api.cleanupState(cleanupId)
       cleanupProgress.value = { checked: st.checked, total: st.total, dead: st.dead, alive: st.alive, disabled: st.disabled, deleted: st.deleted }
       if (!st.running) {
@@ -250,18 +267,20 @@ async function runCleanup() {
         break
       }
     }
-    load()
-    const r = cleanupResult.value!
-    ElMessage.success(
-      `校验 ${r.checked} 个：可用 ${r.alive}，失效 ${r.dead}` +
-        (cleanupMode.value === 'delete'
-          ? `，已删除 ${r.deleted}`
-          : cleanupMode.value === 'disable'
-            ? `，已禁用 ${r.disabled}`
-            : ''),
-    )
+    if (cleanupAlive) {
+      load()
+      const r = cleanupResult.value!
+      ElMessage.success(
+        `校验 ${r.checked} 个：可用 ${r.alive}，失效 ${r.dead}` +
+          (cleanupMode.value === 'delete'
+            ? `，已删除 ${r.deleted}`
+            : cleanupMode.value === 'disable'
+              ? `，已禁用 ${r.disabled}`
+              : ''),
+      )
+    }
   } catch (e: any) {
-    ElMessage.error(e.message)
+    if (cleanupAlive) ElMessage.error(e.message)
   } finally {
     cleaning.value = false
     closeCleanupSSE?.()
@@ -288,7 +307,10 @@ const debugSource = ref<BookSource | null>(null)
 const debugTrace = ref<DebugTrace | null>(null)
 const debugLoading = ref(false)
 
+// 请求序号守卫：快速输入时旧响应晚到会覆盖新关键词结果（与 BooksView loadSeq 同款）
+let loadSeq = 0
 async function load() {
+  const seq = ++loadSeq
   loading.value = true
   try {
     const r = await api.listSources({
@@ -298,13 +320,24 @@ async function load() {
       limit: pageSize,
       offset: (page.value - 1) * pageSize,
     })
+    if (seq !== loadSeq) return // 已有更新的请求在途，丢弃旧响应
     items.value = r.items ?? []
     total.value = r.total
   } catch (e: any) {
-    ElMessage.error(e.message)
+    if (seq === loadSeq) ElMessage.error(e.message)
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
+}
+
+// 关键词防抖：每键全量查询过重，且 seq 守卫只防覆盖不防频次
+let keywordTimer: number | null = null
+function onKeywordInput() {
+  if (keywordTimer !== null) clearTimeout(keywordTimer)
+  keywordTimer = window.setTimeout(() => {
+    keywordTimer = null
+    load()
+  }, 300)
 }
 
 /** 全部分组（拆分聚合，筛选下拉数据源） */
@@ -403,9 +436,14 @@ function stopSyncPoll() {
   }
 }
 
+// 连续查询失败计数：瞬时网络错误保留轮询（终止会让批量同步永久卡死），
+// 连续多次失败视为任务已不存在（后端重启清理）才停止
+let syncPollFailCount = 0
+
 async function pollSyncJob(id: string) {
   try {
     const p = await api.syncRepoStatus(id)
+    syncPollFailCount = 0
     if (syncJob.value) syncJob.value.progress = p
     if (!p.running && p.finished) {
       stopSyncPoll()
@@ -420,8 +458,13 @@ async function pollSyncJob(id: string) {
       load()
     }
   } catch {
-    /* 任务可能已过期，停止轮询 */
-    stopSyncPoll()
+    syncPollFailCount++
+    if (syncPollFailCount >= 5) {
+      syncPollFailCount = 0
+      stopSyncPoll()
+      if (syncJob.value) syncJob.value.progress.running = false
+      ElMessage.warning('同步状态查询连续失败，已停止轮询')
+    }
   }
 }
 
@@ -447,10 +490,10 @@ async function syncSelectedRepos() {
   if (!list.length) return
   for (const repo of list) {
     await syncRepo(repo, false)
-    // 等当前任务完成再继续（轮询中 progress.finished 置位）
+    // 等当前任务完成再继续（轮询中 progress.finished 置位；卸载后中止防 interval 泄漏）
     await new Promise<void>((resolve) => {
       const t = setInterval(() => {
-        if (!syncJob.value?.progress.running) {
+        if (!cleanupAlive || !syncJob.value?.progress.running) {
           clearInterval(t)
           resolve()
         }
@@ -468,7 +511,11 @@ async function cancelSync() {
   } catch { /* ignore */ }
 }
 
-onUnmounted(stopSyncPoll)
+onUnmounted(() => {
+  cleanupAlive = false
+  stopSyncPoll()
+  closeCleanupSSE?.()
+})
 
 function exportAll() {
   window.open(api.exportSources(), '_blank')
@@ -519,7 +566,7 @@ onMounted(() => {
     <p class="page-sub">兼容「阅读」APP 全部书源 JSON；内置仓库实时同步；支持校验可用性与逐步骤调试</p>
 
     <div class="toolbar">
-      <el-input v-model="keyword" placeholder="搜索名称/分组" style="width: 220px" clearable @input="page = 1; load()" />
+      <el-input v-model="keyword" placeholder="搜索名称/分组" style="width: 220px" clearable @input="page = 1; onKeywordInput()" />
       <el-select v-model="groupFilter" placeholder="全部分组" style="width: 170px" clearable filterable @change="page = 1; load()">
         <el-option v-for="g in groups" :key="g" :value="g" :label="g" />
       </el-select>

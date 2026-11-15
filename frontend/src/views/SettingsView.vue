@@ -34,6 +34,13 @@ async function save() {
     ElMessage.warning('请至少选择一种默认导出格式')
     return
   }
+  // el-input-number 清空会 emit null（value-on-clear 兜底之外的防御）：null 存进去
+  // 会在刷新后被后端 parseInt 静默回退默认值，保存提示与实际状态不一致
+  const probes = [probeBatchSize.value, probeMaxSources.value, probeStopHealthy.value]
+  if (probes.some((v) => !Number.isFinite(v))) {
+    ElMessage.warning('目录探测三项不能为空')
+    return
+  }
   if (probeStopHealthy.value > probeMaxSources.value) {
     ElMessage.warning('健康即停阈值不能大于最大探测源数')
     return
@@ -108,15 +115,15 @@ async function save() {
           <div class="probe-grid">
             <div class="probe-item">
               <span class="probe-label">每批探测源数</span>
-              <el-input-number v-model="probeBatchSize" :min="1" :max="20" />
+              <el-input-number v-model="probeBatchSize" :min="1" :max="20" :value-on-clear="1" />
             </div>
             <div class="probe-item">
               <span class="probe-label">最多探测源数</span>
-              <el-input-number v-model="probeMaxSources" :min="1" :max="100" />
+              <el-input-number v-model="probeMaxSources" :min="1" :max="100" :value-on-clear="1" />
             </div>
             <div class="probe-item">
               <span class="probe-label">健康即停阈值</span>
-              <el-input-number v-model="probeStopHealthy" :min="1" :max="20" />
+              <el-input-number v-model="probeStopHealthy" :min="1" :max="20" :value-on-clear="1" />
             </div>
           </div>
           <div class="muted">

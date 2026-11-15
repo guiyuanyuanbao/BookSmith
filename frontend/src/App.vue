@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Reading, Search, Collection, Download, FolderOpened, Filter, DataBoard, Setting, Compass } from '@element-plus/icons-vue'
 import DownloadPanel from '@/components/DownloadPanel.vue'
@@ -7,7 +7,14 @@ import { useTasksStore } from '@/stores/tasks'
 
 const route = useRoute()
 const tasksStore = useTasksStore()
-tasksStore.start()
+// 登录页不启动轮询/SSE：无 key 的请求只会刷 401；登录成功后 LoginView 调 restartSSE 恢复
+watch(
+  () => route.path,
+  (p) => {
+    if (p !== '/login') tasksStore.start()
+  },
+  { immediate: true },
+)
 
 // 窄屏自动折叠侧边栏（图标模式），拖宽自动展开
 const isNarrow = ref(false)

@@ -44,31 +44,31 @@ http.interceptors.response.use(
 
 export async function apiGet<T = any>(url: string, params?: any): Promise<T> {
   const r = (await http.get(url, { params })) as ApiResult<T>
-  if (!r.isSuccess) throw new Error(r.errorMsg)
+  if (!r.isSuccess) throw new Error(r.errorMsg || '响应格式异常')
   return r.data
 }
 
 export async function apiPost<T = any>(url: string, body?: any): Promise<T> {
   const r = (await http.post(url, body)) as ApiResult<T>
-  if (!r.isSuccess) throw new Error(r.errorMsg)
+  if (!r.isSuccess) throw new Error(r.errorMsg || '响应格式异常')
   return r.data
 }
 
 export async function apiPatch<T = any>(url: string, body?: any): Promise<T> {
   const r = (await http.patch(url, body)) as ApiResult<T>
-  if (!r.isSuccess) throw new Error(r.errorMsg)
+  if (!r.isSuccess) throw new Error(r.errorMsg || '响应格式异常')
   return r.data
 }
 
 export async function apiPut<T = any>(url: string, body?: any): Promise<T> {
   const r = (await http.put(url, body)) as ApiResult<T>
-  if (!r.isSuccess) throw new Error(r.errorMsg)
+  if (!r.isSuccess) throw new Error(r.errorMsg || '响应格式异常')
   return r.data
 }
 
 export async function apiDelete<T = any>(url: string): Promise<T> {
   const r = (await http.delete(url)) as ApiResult<T>
-  if (!r.isSuccess) throw new Error(r.errorMsg)
+  if (!r.isSuccess) throw new Error(r.errorMsg || '响应格式异常')
   return r.data
 }
 

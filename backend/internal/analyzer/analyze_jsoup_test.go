@@ -3,6 +3,7 @@ package analyzer
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -283,6 +284,14 @@ func TestJSONAnalyzer(t *testing.T) {
 type echoJSEngine struct{}
 
 func (e *echoJSEngine) Eval(script string, bindings map[string]any) (any, error) {
+	return e.eval(script, bindings)
+}
+
+func (e *echoJSEngine) EvalWithTimeout(script string, bindings map[string]any, timeout time.Duration) (any, error) {
+	return e.eval(script, bindings)
+}
+
+func (e *echoJSEngine) eval(script string, bindings map[string]any) (any, error) {
 	// 简单模拟：result + baseUrl 拼接或常量
 	if strings.Contains(script, "baseUrl") {
 		if b, ok := bindings["baseUrl"].(string); ok {

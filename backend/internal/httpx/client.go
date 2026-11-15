@@ -467,7 +467,8 @@ func (c *Client) doOnce(ctx context.Context, req *Request) (*Response, error) {
 // applyDefaultHeaders 设置默认请求头（书源未指定时）。
 func applyDefaultHeaders(hr *http.Request, req *Request) {
 	if req.Headers == nil || req.Headers["User-Agent"] == "" {
-		hr.Header.Set("User-Agent", RandomUA())
+		// 按主机确定性选 UA：同主机每请求随机换 UA 会让按 UA 出不同页面结构的站点间歇性失败
+		hr.Header.Set("User-Agent", UAForHost(hr.URL.Host))
 	}
 	if req.Headers == nil || req.Headers["Accept"] == "" {
 		hr.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")

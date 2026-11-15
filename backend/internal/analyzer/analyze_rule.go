@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 
@@ -27,6 +28,8 @@ const (
 type JSEngine interface {
 	// Eval 执行脚本并返回 Go 值；出错返回 error。
 	Eval(script string, bindings map[string]any) (any, error)
+	// EvalWithTimeout 带看门狗执行；书源 JS 死循环若不设超时会永久卡死调用方 goroutine。
+	EvalWithTimeout(script string, bindings map[string]any, timeout time.Duration) (any, error)
 }
 
 // VariableProvider 变量存取（chapter/book/ruleData/source 层级由实现组织）。

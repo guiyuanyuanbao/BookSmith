@@ -133,11 +133,13 @@ func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSour
 	// 持久化书源（断点恢复/重试需要完整规则）
 	if bs.BookSourceURL != "" {
 		if err := m.st.UpsertSource(bs, bs.Custom); err != nil {
+			m.mu.Unlock()
 			return 0, false, fmt.Errorf("保存书源失败: %w", err)
 		}
 	}
 	bookID, err := m.st.UpsertBook(book)
 	if err != nil {
+		m.mu.Unlock()
 		return 0, false, fmt.Errorf("保存书籍失败: %w", err)
 	}
 	if concurrency <= 0 {
@@ -552,7 +554,15 @@ func (m *Manager) bumpProgress(taskID int64) {
 	if err != nil {
 		return
 	}
-	_, done, failed, _ := m.st.CountChapterStatus(t.BookID)
+	// 区间下载时只统计区间内章节：全书口径会让 done 远大于区间 total（进度条倒挂）
+	var done, failed int
+	if t.RangeStart >= 0 && t.RangeEnd > 0 {
+		total, d, f, _ := m.st.CountChapterStatusRange(t.BookID, int64(t.RangeStart), int64(t.RangeEnd))
+		done, failed = d, f
+		_ = total
+	} else {
+		_, done, failed, _ = m.st.CountChapterStatus(t.BookID)
+	}
 	t.DoneChapters = done
 	t.FailChapters = failed
 	_ = m.st.UpdateTask(t)
@@ -710,8 +720,19 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 		fp := filepath.Join(finalDir, filepath.Base(sf.path))
 		_ = os.Remove(fp) // Windows 上 Rename 不覆盖已存在目标；清掉无记录残留旧文件
 		if err := os.Rename(sf.path, fp); err != nil {
-			// 恢复：重新登记磁盘上仍存在的旧成品与已搬入的新成品（按路径去重，
-			// 新旧同名时只登记一份，保持 DB 与磁盘一致）
+			// rename 失败（旧文件已删、暂存文件在 defer RemoveAll 前仍在）：
+			// 先重试一次 rename（瞬时锁可能已释放），仍失败则回拷暂存内容兜底，
+			// 最后登记现存文件，DB 与磁盘保持一致
+			err2 := os.Rename(sf.path, fp)
+			if err2 != nil {
+				if data, rerr := os.ReadFile(sf.path); rerr == nil {
+					err2 = os.WriteFile(fp, data, 0o644)
+				}
+			}
+			if err2 == nil {
+				finalPaths = append(finalPaths, fp)
+				continue
+			}
 			m.reAddExports(taskID, book.ID, append(oldPaths, finalPaths...))
 			return "", fmt.Errorf("替换成品文件失败: %w", err)
 		}
@@ -825,6 +846,16 @@ func (m *Manager) Resume(id int64) error {
 	t.Status = model.TaskPending
 	t.ErrMsg = ""
 	_ = m.st.UpdateTask(t)
+	// TOCTOU：旧流水线刚置 Paused 但 defer delete(m.running) 尚未执行时，
+	// 立即 go run 会被重入守卫静默拒绝 → 任务永久卡 Pending 无消费方。
+	// 等旧流水线注销（窗口微秒级，上限 2s 防御性兜底）后再启动。
+	deadline := time.Now().Add(2 * time.Second)
+	for m.IsRunning(t.ID) {
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	go m.run(t.ID, book, bs)
 	return nil
 }
@@ -899,6 +930,14 @@ func (m *Manager) RetryFailed(id int64) error {
 	t.Phase = "toc" // run 总是先重拉目录（可能已更新），从 toc 开始
 	t.ErrMsg = ""
 	_ = m.st.UpdateTask(t)
+	// 与 Resume 相同的 TOCTOU 等待：旧流水线 defer delete(m.running) 前启动会被重入守卫吞掉
+	deadline := time.Now().Add(2 * time.Second)
+	for m.IsRunning(t.ID) {
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	go m.run(t.ID, book, bs)
 	return nil
 }

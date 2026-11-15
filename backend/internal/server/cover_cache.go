@@ -68,6 +68,10 @@ func coverCachePut(dataDir, rawURL string, data []byte, mime string) {
 // 走全局信号量与缓存查询（未进 in-flight 去重——调用方为逐源探测，URL 各异；
 // 同 URL 并发由 coverCachePut 的唯一 tmp 名兜底）。
 func (s *Server) fetchAndCacheCover(rawURL string) ([]byte, string, bool) {
+	// 内网防御与直抓路径一致：恶意书源可借内网 URL 存活探测（SSRF）
+	if !s.app.AllowPrivateCoverFetch && isPrivateHost(rawURL) {
+		return nil, "", false
+	}
 	// 先查缓存（其他探测协程可能已写入同一封面）
 	if d, m, ok := s.app.coverCacheLookup(rawURL); ok {
 		return d, m, true

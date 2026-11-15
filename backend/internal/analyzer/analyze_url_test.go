@@ -3,12 +3,21 @@ package analyzer
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // mockJSEngine 支持 {{key}} 等绑定的测试引擎。
 type mockJSEngine struct{}
 
 func (m *mockJSEngine) Eval(script string, bindings map[string]any) (any, error) {
+	return m.eval(script, bindings)
+}
+
+func (m *mockJSEngine) EvalWithTimeout(script string, bindings map[string]any, timeout time.Duration) (any, error) {
+	return m.eval(script, bindings)
+}
+
+func (m *mockJSEngine) eval(script string, bindings map[string]any) (any, error) {
 	// 模拟书源常见 JS：key/baseUrl 引用与简单字符串拼接
 	// 字符串字面量直接求值
 	trimmed := strings.TrimSpace(script)

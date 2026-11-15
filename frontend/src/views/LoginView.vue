@@ -4,8 +4,10 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api, setApiKey } from '@/api'
+import { useTasksStore } from '@/stores/tasks'
 
 const router = useRouter()
+const tasksStore = useTasksStore()
 const key = ref('')
 const loading = ref(false)
 const checking = ref(true)
@@ -22,6 +24,8 @@ onMounted(async () => {
     if (saved) {
       setApiKey(saved)
       await api.authLogin(saved)
+      // onMounted 前 App 已用空 key 绑了 SSE（EventSource URL 定格），重建恢复实时推送
+      tasksStore.restartSSE()
       router.replace('/overview')
       return
     }
@@ -39,6 +43,7 @@ async function login() {
     setApiKey(key.value.trim()) // 先带上 key 调登录接口
     await api.authLogin(key.value.trim())
     ElMessage.success('验证通过')
+    tasksStore.restartSSE() // 同上：SSE 需带 key 重连
     router.replace('/overview')
   } catch (e: any) {
     setApiKey('')

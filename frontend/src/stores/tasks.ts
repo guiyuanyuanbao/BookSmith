@@ -24,6 +24,7 @@ export const useTasksStore = defineStore('tasks', () => {
 
   let timer: number | null = null
   let sseBound = false
+  let closeSSE: (() => void) | null = null
 
   const entries = computed(() =>
     Object.entries(activeDownloads.value).map(([tid, v]) => ({ tid: Number(tid), ...v })),
@@ -103,19 +104,6 @@ export const useTasksStore = defineStore('tasks', () => {
 
   /** 应用启动时调用：绑定 SSE + 启动轮询 */
   function start() {
-    if (!sseBound) {
-      sseBound = true
-      subscribeEvents({
-        onTaskProgress: (d: any) => {
-          applyEvent(d)
-          refreshServerActive()
-        },
-        onTaskDone: (d: any) => {
-          applyEvent(d)
-          refreshServerActive()
-        },
-      })
-    }
     if (timer === null) {
       refreshServerActive()
       timer = window.setInterval(() => {
@@ -123,7 +111,44 @@ export const useTasksStore = defineStore('tasks', () => {
         if (Object.keys(activeDownloads.value).length) refresh()
       }, 3000)
     }
+    bindSSE()
   }
 
-  return { activeDownloads, panelOpen, panelMin, entries, panelActiveCount, serverActiveCount, add, remove, refresh, applyEvent, refreshServerActive, start }
+  /** 绑定 SSE（可重入：登录成功后调用以重建连接——EventSource URL 里的 key 已定格，无法更新） */
+  function bindSSE() {
+    if (sseBound) return
+    sseBound = true
+    closeSSE = subscribeEvents({
+      onTaskProgress: (d: any) => {
+        applyEvent(d)
+        throttledServerRefresh()
+      },
+      onTaskDone: (d: any) => {
+        applyEvent(d)
+        refreshServerActive() // 终态事件必须立即刷新（数量变化）
+      },
+    })
+  }
+
+  /** 登录后重建 SSE：关掉无 key 的旧连接重新订阅（鉴权部署下进度事件恢复实时推送） */
+  function restartSSE() {
+    if (closeSSE) {
+      closeSSE()
+      closeSSE = null
+    }
+    sseBound = false
+    bindSSE()
+  }
+
+  // progress 事件每章触发一次（高并发下每秒多个），逐事件打 listTasks 会成请求风暴；
+  // 节流 1.5s：事件内只精确 apply，服务器计数留给节流后的刷新 + 3s 轮询兜底
+  let lastServerRefresh = 0
+  function throttledServerRefresh() {
+    const now = Date.now()
+    if (now - lastServerRefresh < 1500) return
+    lastServerRefresh = now
+    refreshServerActive()
+  }
+
+  return { activeDownloads, panelOpen, panelMin, entries, panelActiveCount, serverActiveCount, add, remove, refresh, applyEvent, refreshServerActive, start, restartSSE }
 })

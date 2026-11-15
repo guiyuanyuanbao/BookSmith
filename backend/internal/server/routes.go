@@ -341,6 +341,10 @@ func (s *Server) handleYioveImportURL(w http.ResponseWriter, r *http.Request) {
 	}
 	page := queryInt(r, "page", 1)
 	pageSize := queryInt(r, "pageSize", 20)
+	if page < 1 {
+		writeErr(w, 400, "page 必须从 1 开始")
+		return
+	}
 	if pageSize < 1 || pageSize > 100 {
 		writeErr(w, 400, "pageSize 超出范围（1-100）")
 		return
@@ -489,7 +493,11 @@ func (s *Server) handleGetBook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteBook(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, 400, "无效的书籍 ID")
+		return
+	}
 	// 删除前收集封面 URL（删除后无法再查）；导出文件也需在记录消失前取路径
 	coverURLs := s.bookCoverURLs([]int64{id})
 	// 封面兜底：若同书剩余来源都不足以提供封面，先把封面转存为本地封面再删
@@ -527,8 +535,16 @@ func (s *Server) handleBookToc(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChapter(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	index, _ := strconv.Atoi(r.PathValue("index"))
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, 400, "无效的书籍 ID")
+		return
+	}
+	index, err := strconv.Atoi(r.PathValue("index"))
+	if err != nil {
+		writeErr(w, 400, "无效的章节序号")
+		return
+	}
 	ch, err := s.app.Store.GetChapter(id, index)
 	if err != nil {
 		writeErr(w, 404, "章节不存在")

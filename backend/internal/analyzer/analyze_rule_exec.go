@@ -3,6 +3,7 @@ package analyzer
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ---------------- 执行引擎 ----------------
@@ -496,7 +497,9 @@ func (ar *AnalyzeRule) evalJSAny(jsStr string, result any) any {
 	if ar.chapterTitle != "" {
 		bindings["title"] = ar.chapterTitle
 	}
-	v, err := ar.js.Eval(jsStr, bindings)
+	// 30s 看门狗：书源 JS 死循环会让章节 worker 永久阻塞（任务僵尸 + goroutine 泄漏），
+	// ctx 无法穿透 goja，只能靠 vm.Interrupt 兜底
+	v, err := ar.js.EvalWithTimeout(jsStr, bindings, 30*time.Second)
 	if err != nil {
 		msg := err.Error()
 		if len(msg) > 200 {
