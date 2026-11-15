@@ -129,12 +129,14 @@ html, body, #app {
   --el-fill-color-lighter: #f4f1ea;
 }
 
-/* 表格轻量化 */
+/* 表格轻量化（表头/悬停色用主题变量，暗色自动适配） */
 .el-table {
   --el-table-border-color: var(--bs-border);
-  --el-table-header-bg-color: #faf8f4;
+  --el-table-header-bg-color: var(--el-fill-color-light);
   --el-table-header-text-color: var(--bs-text-sub);
-  --el-table-row-hover-bg-color: #f6f9f7;
+  --el-table-row-hover-bg-color: var(--el-fill-color);
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
 }
 .el-table th.el-table__cell {
   font-weight: 600;
