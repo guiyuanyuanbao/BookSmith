@@ -42,6 +42,11 @@ type Manager struct {
 	LocalCover func(bookID int64) *export.CoverImage
 	// CoverProvider 按 URL 获取封面（两级缓存：磁盘 + 远程），优先于 DownloadCover 实时抓取
 	CoverProvider func(rawURL string) *export.CoverImage
+
+	// exportLocks 同书导出串行化锁（bookID → *sync.Mutex）：并发导出会互删对方成品
+	exportLocks sync.Map
+	// exporterOverride 测试注入点（nil 时走 export.ForFormat）
+	exporterOverride func(f export.Format) (export.Exporter, error)
 }
 
 // taskControl 运行中任务控制块。
@@ -65,6 +70,15 @@ func New(st *store.Store, svc *webbook.Service, bus *EventBus, outDir string) *M
 	// 导出记录一致性清理：指向已丢失文件的幽灵记录、同路径重复旧记录
 	if n, err := st.SweepGhostExports(); err == nil && n > 0 {
 		fmt.Fprintln(os.Stderr, "[task] swept ghost export records on startup:", n)
+	}
+	// 清理崩溃遗留的导出暂存目录（doExport 用 .export-tmp-* 暂存，正常路径必清；
+	// 进程被 kill 时可能遗留——真实书目录经 SanitizeFileName 不可能以 "." 开头，无冲突）
+	if entries, err := os.ReadDir(outDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), ".export-tmp-") {
+				_ = os.RemoveAll(filepath.Join(outDir, e.Name()))
+			}
+		}
 	}
 	return &Manager{
 		st:                 st,
@@ -565,18 +579,9 @@ func (m *Manager) ExportNow(taskID int64, book *model.Book, formats []string) (s
 	return m.doExport(taskID, book, formats)
 }
 
-// removeOldExports 删除该书旧的导出文件与记录（新导出生成前调用，保证成品始终对应最新缓存）。
-func (m *Manager) removeOldExports(bookID int64) {
-	paths, err := m.st.DeleteExportsByBook(bookID)
-	if err != nil {
-		return
-	}
-	for _, p := range paths {
-		_ = os.Remove(p)
-	}
-}
-
 // doExport 按格式导出（章节缓存复用）。
+// 核心保证：**任何生成失败都不碰旧成品**——先写临时暂存目录，全部格式成功后
+// 才删除旧记录/旧文件并原子搬入新文件；同书并发导出按 bookID 串行化。
 func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (result string, err error) {
 	// panic 兜底：任何意外（字体解析、图片解码、内存）都不让任务静默卡在 exporting。
 	// panic 转为 error 返回给调用方（同步 ExportNow 路径标 failed；异步 run 路径由 run 的 recover 记录）
@@ -586,12 +591,16 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 			err = fmt.Errorf("导出内部异常: %v\n%s", r, debug.Stack())
 		}
 	}()
+	// 同书串行化：两个并发导出若都走「删旧→写新」会互删对方刚写的文件
+	lockAny, _ := m.exportLocks.LoadOrStore(book.ID, &sync.Mutex{})
+	lock := lockAny.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
 	allChapters, err := m.st.ListChapters(book.ID, true)
 	if err != nil {
 		return "", err
 	}
-	// 新导出生成前清理旧成品（内容已随缓存更新，旧文件不再有意义）
-	m.removeOldExports(book.ID)
 	ctxData := &export.ExportContext{
 		Book: export.BookMeta{
 			Name:       book.Name,
@@ -647,9 +656,25 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 		return "", fmt.Errorf("没有可导出的章节内容（正文全部未缓存）")
 	}
 
-	paths := make([]string, 0, len(formats))
+	// 先写临时暂存目录（在 outDir 内保证同卷 rename）：全部格式成功后才替换旧成品——
+	// 任何生成失败（字体/图片解码/磁盘/权限）都不碰旧文件，彻底消除「导出失败 = 旧文件丢失」
+	stageDir, err := os.MkdirTemp(m.outDir, ".export-tmp-")
+	if err != nil {
+		return "", fmt.Errorf("创建暂存目录失败: %w", err)
+	}
+	defer os.RemoveAll(stageDir) // 成功路径暂存文件已被 rename 走，RemoveAll 只清残留
+
+	bookBase := util.SafeBookFileName(book.Name, book.Author) // 书名/作者各自字节截断（ext4 NAME_MAX=255）
+	srcDir := util.SanitizeFileName(book.OriginName)
+	finalDir := filepath.Join(m.outDir, bookBase, srcDir)
+
+	type stagedFile struct {
+		path   string // 暂存文件绝对路径
+		format string
+	}
+	staged := make([]stagedFile, 0, len(formats))
 	for _, f := range formats {
-		exp, err := export.ForFormat(export.Format(f))
+		exp, err := m.exporterFor(export.Format(f))
 		if err != nil {
 			continue
 		}
@@ -657,28 +682,79 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 		if err := exp.Export(ctxData, &buf); err != nil {
 			return "", fmt.Errorf("%s 导出失败: %w", f, err)
 		}
-		// 目录管理：downloads/{书名(作者)}/{源名}/{书名(作者)}.ext
-		// 文件名不含源名（来源在目录层级中），同书同源重导出覆盖旧文件。
-		// SafeBookFileName：书名/作者各自字节截断（防脏长作者撑爆目录名，ext4 NAME_MAX=255）。
-		bookBase := util.SafeBookFileName(book.Name, book.Author)
-		bookDir := bookBase
-		srcDir := util.SanitizeFileName(book.OriginName)
-		dir := filepath.Join(m.outDir, bookDir, srcDir)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return "", err
-		}
 		name := bookBase + "." + exp.Ext() // 扩展名不参与截断
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
-			return "", err
+		sp := filepath.Join(stageDir, name)
+		if err := os.WriteFile(sp, buf.Bytes(), 0o644); err != nil {
+			return "", fmt.Errorf("写入暂存目录失败: %w", err)
 		}
-		_ = m.st.AddExport(taskID, book.ID, filepath.Base(path), f, path, int64(buf.Len()))
-		paths = append(paths, path)
+		staged = append(staged, stagedFile{path: sp, format: f})
 	}
-	if len(paths) == 0 {
+	if len(staged) == 0 {
 		return "", fmt.Errorf("无可导出格式")
 	}
-	return paths[0], nil
+
+	// ---- 生成全部成功，现在才替换旧成品 ----
+	// 删旧记录（返回旧文件路径），删旧文件，搬入新文件，登记新记录。
+	// 各步骤间窗口极小（毫秒级）且失败时走 reAdd 恢复磁盘上仍在的文件登记。
+	oldPaths, _ := m.st.DeleteExportsByBook(book.ID)
+	for _, p := range oldPaths {
+		if p != "" {
+			_ = os.Remove(p)
+		}
+	}
+	if err := os.MkdirAll(finalDir, 0o755); err != nil {
+		m.reAddExports(taskID, book.ID, oldPaths)
+		return "", err
+	}
+	finalPaths := make([]string, 0, len(staged))
+	for _, sf := range staged {
+		fp := filepath.Join(finalDir, filepath.Base(sf.path))
+		_ = os.Remove(fp) // Windows 上 Rename 不覆盖已存在目标；清掉无记录残留旧文件
+		if err := os.Rename(sf.path, fp); err != nil {
+			// 恢复：重新登记磁盘上仍存在的旧成品与已搬入的新成品（按路径去重，
+			// 新旧同名时只登记一份，保持 DB 与磁盘一致）
+			m.reAddExports(taskID, book.ID, append(oldPaths, finalPaths...))
+			return "", fmt.Errorf("替换成品文件失败: %w", err)
+		}
+		finalPaths = append(finalPaths, fp)
+	}
+	for _, fp := range finalPaths {
+		fi, _ := os.Stat(fp)
+		size := int64(0)
+		if fi != nil {
+			size = fi.Size()
+		}
+		_ = m.st.AddExport(taskID, book.ID, filepath.Base(fp), formatByExt(fp), fp, size)
+	}
+	return finalPaths[0], nil
+}
+
+// exporterFor 获取格式导出器（测试可注入 override；生产走 export.ForFormat）。
+func (m *Manager) exporterFor(f export.Format) (export.Exporter, error) {
+	if m.exporterOverride != nil {
+		return m.exporterOverride(f)
+	}
+	return export.ForFormat(f)
+}
+
+// reAddExports 恢复登记磁盘上仍存在的成品记录（替换中途失败时保持 DB 与磁盘一致）。
+// 按路径去重：新旧成品同名时只登记一份。
+func (m *Manager) reAddExports(taskID, bookID int64, paths []string) {
+	seen := map[string]bool{}
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			_ = m.st.AddExport(taskID, bookID, filepath.Base(p), formatByExt(p), p, fi.Size())
+		}
+	}
+}
+
+// formatByExt 由扩展名推导导出格式名（恢复登记用；未知扩展名原样返回小写）。
+func formatByExt(path string) string {
+	return strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
 }
 
 // dropDupTitle 导出前去重复标题。

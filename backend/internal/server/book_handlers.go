@@ -71,12 +71,8 @@ func (s *Server) handleBookDownload(w http.ResponseWriter, r *http.Request) {
 	if serr == nil && total > 0 && done > 0 && failed == 0 {
 		pending := total - done
 		if pending <= 0 {
-			// 先清旧导出
-			if paths, e := s.app.Store.DeleteExportsByBook(id); e == nil {
-				for _, p := range paths {
-					_ = osRemove(p)
-				}
-			}
+			// 旧成品不再在此预删：doExport 内部「暂存→全部成功后替换」保证
+			// 生成失败不丢旧文件（此处预删曾导致导出失败即丢旧成品）
 			t := &model.DownloadTask{
 				BookID: id, BookName: book.Name, Author: book.Author,
 				Origin: book.Origin, OriginName: book.OriginName,
@@ -158,8 +154,4 @@ func (s *Server) handleDeleteExport(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = os.Remove(path) // 磁盘文件删除失败不影响记录清除
 	writeOK(w, nil)
-}
-
-func osRemove(path string) error {
-	return os.Remove(path)
 }
