@@ -68,8 +68,12 @@ export const useSettingsStore = defineStore('settings', () => {
       root.style.setProperty('--el-bg-color-page', '#22262c')
       root.style.setProperty('--el-text-color-primary', '#e6e3dc')
       root.style.setProperty('--el-text-color-regular', '#c9c5bc')
+      root.style.setProperty('--el-fill-color', '#333941')
       root.style.setProperty('--el-fill-color-light', '#333941')
+      root.style.setProperty('--el-fill-color-lighter', '#303640')
+      root.style.setProperty('--el-fill-color-blank', '#2b3037')
       root.style.setProperty('--el-border-color', '#3a4048')
+      root.style.setProperty('--el-border-color-light', '#3a4048')
     } else {
       root.style.setProperty('--bs-bg', preset.bg)
       root.style.setProperty('--bs-card', '#ffffff')
@@ -80,8 +84,12 @@ export const useSettingsStore = defineStore('settings', () => {
       root.style.setProperty('--el-bg-color-page', preset.bg)
       root.style.setProperty('--el-text-color-primary', '#2c2a26')
       root.style.setProperty('--el-text-color-regular', '#5c5850')
+      root.style.setProperty('--el-fill-color', '#f4f1ea')
       root.style.setProperty('--el-fill-color-light', '#f4f1ea')
+      root.style.setProperty('--el-fill-color-lighter', '#faf8f4')
+      root.style.setProperty('--el-fill-color-blank', '#ffffff')
       root.style.setProperty('--el-border-color', '#ece8df')
+      root.style.setProperty('--el-border-color-light', '#ece8df')
     }
   }
 

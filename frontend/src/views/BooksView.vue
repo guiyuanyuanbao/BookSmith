@@ -890,7 +890,7 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 .source-row {
-  background: #faf8f4;
+  background: var(--el-fill-color-light, #faf8f4);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -918,7 +918,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 4px 8px;
-  background: #faf8f4;
+  background: var(--el-fill-color-light, #faf8f4);
   border-radius: 7px;
   font-size: 12px;
 }
