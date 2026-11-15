@@ -24,13 +24,15 @@ type cachedExploreKinds struct {
 }
 
 // ExploreKinds 解析源的分类列表（5 分钟缓存）。以下情形返回 nil（前端不展示）：
-// 未启用发现、exploreUrl 为空、ruleExplore.bookList 为空（无法解析列表，点了也必然失败）。
+// 未启用发现、exploreUrl 为空、发现与搜索规则均无 bookList（无法解析任何列表）。
+// ruleExplore.bookList 为空但搜索规则可用 → 仍展示（legado 回退语义，ExploreOne 会用搜索规则）。
 func (s *Service) ExploreKinds(bs *model.BookSource) []model.ExploreKind {
 	if bs == nil || !bs.EnabledExplore || strings.TrimSpace(bs.ExploreURL) == "" {
 		return nil
 	}
-	if bs.RuleExplore == nil || strings.TrimSpace(bs.RuleExplore.BookList) == "" {
-		return nil // 未配置发现规则：源树不展示，避免"点了就报错"的假可用源
+	if (bs.RuleExplore == nil || strings.TrimSpace(bs.RuleExplore.BookList) == "") &&
+		(bs.RuleSearch == nil || strings.TrimSpace(bs.RuleSearch.BookList) == "") {
+		return nil // 发现与搜索规则均缺失：点了也必然失败
 	}
 	key := bs.BookSourceURL
 	exploreKindsCache.mu.Lock()
@@ -52,20 +54,28 @@ func (s *Service) ExploreKinds(bs *model.BookSource) []model.ExploreKind {
 }
 
 // ExploreOne 抓取单源某分类的书籍列表（page 从 1 开始）。
+// 语义对齐 legado BookList.analyzeBookList：ruleExplore.bookList 为空时
+// **回退用 searchRule** 解析（legado 原版行为，大量源不配 ruleExplore 也能发现）。
 func (s *Service) ExploreOne(ctx context.Context, bs *model.BookSource, kindURL string, page int) ([]*model.ExploreBook, error) {
-	if bs.RuleExplore == nil || strings.TrimSpace(bs.RuleExplore.BookList) == "" {
-		return nil, fmt.Errorf("书源 %s 的 ruleExplore 未配置 bookList（该源无法解析发现列表）", bs.BookSourceName)
-	}
+	// legado BookList.kt:84-88：explore bookList 空白 → 用搜索规则
+	useSearchRule := bs.RuleExplore == nil || strings.TrimSpace(bs.RuleExplore.BookList) == ""
 	body, finalURL, err := s.fetchWithRule(ctx, bs, kindURL, bs.BookSourceURL, page, "")
 	if err != nil {
 		return nil, fmt.Errorf("发现请求失败: %w", err)
 	}
-	return s.analyzeExploreList(bs, body, finalURL)
+	return s.analyzeExploreList(bs, body, finalURL, useSearchRule)
 }
 
 // analyzeExploreList 解析发现列表（照 analyzeSearchList 模式逐字段提取）。
-func (s *Service) analyzeExploreList(bs *model.BookSource, body, baseURL string) ([]*model.ExploreBook, error) {
+// useSearchRule=true 时用搜索规则解析（legado 回退语义）。
+func (s *Service) analyzeExploreList(bs *model.BookSource, body, baseURL string, useSearchRule bool) ([]*model.ExploreBook, error) {
 	re := bs.RuleExplore
+	if useSearchRule {
+		re = bs.RuleSearch
+	}
+	if re == nil || strings.TrimSpace(re.BookList) == "" {
+		return nil, fmt.Errorf("书源 %s 的发现与搜索规则均未配置 bookList（无法解析列表）", bs.BookSourceName)
+	}
 	ar := s.NewAnalyzeRule(bs, baseURL, nil)
 	ar.SetContent(body, baseURL)
 	ar.SetRedirectURL(baseURL)

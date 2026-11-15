@@ -542,6 +542,15 @@ type ExploreKind struct {
 //  2. 直接 JSON 数组 [{"title":..,"url":..}] → 宽松解析
 //  3. 纯 URL（无分类结构）→ 单分类"全部分类"兜底
 // 分类 URL 里的 {{page}} 与 ,{options} 由 AnalyzeUrl 流水线在请求时处理，此处不展开。
+// AnalyzeExploreKinds 解析 legado exploreUrl 为分类列表，语义对齐 legado
+// BookSourceExtensions.exploreKinds()：
+//  1. <js>...</js> / @js: → JS 求值出结果（binding page/key/baseUrl 注入）
+//  2. 求值结果/原文为 JSON 数组 → 逐项取 title/url（url 为空的分组标题行保留判断由调用方处理——
+//     legado 原版原样保留，这里为前端可用性过滤掉不可点项）
+//  3. 否则按 legado "(&&|\n)+" 分隔符切分（除换行还支持 &&），每段 "标题::URL"；
+//     url 为空的段（纯分组标题，如"♂::"）跳过
+//  4. 纯 URL（无分类结构）→ 单分类"全部分类"兜底
+// 分类 URL 里的 {{page}}、<page 数组> 与 ,{options} 由 AnalyzeUrl 流水线在请求时处理。
 func AnalyzeExploreKinds(ruleURL, baseURL string, source BookSourceRef, js JSEngine, cookies CookieProvider) []ExploreKind {
 	au, err := NewAnalyzeUrl("", "", 1, baseURL, source, js, nil, cookies, nil)
 	if err != nil {
@@ -569,29 +578,28 @@ func AnalyzeExploreKinds(ruleURL, baseURL string, source BookSourceRef, js JSEng
 			}
 		}
 	}
-	// 形态 3：多行 "标题::URL" 形制（legado 标准写法，如"玄幻::/xiaoshuofenlei/xuanhuan.html"）。
-	// 行内可含 <page> 页码数组尾缀；URL 为空的行是分组标题（如"♂::"），跳过。
-	if lines := strings.Split(expanded, "\n"); len(lines) > 0 && strings.Contains(lines[0], "::") {
-		out := make([]ExploreKind, 0, len(lines))
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			parts := strings.SplitN(line, "::", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			title := strings.TrimSpace(parts[0])
-			url := strings.TrimSpace(parts[1])
-			if title == "" || url == "" {
-				continue // 分组标题行（url 为空）
-			}
-			out = append(out, ExploreKind{Title: title, URL: url})
+	// 形态 3：legado 分隔语义 "(&&|\n)+"，每段 "标题::URL"。
+	// url 为空的段是分组标题（如"♂::"），跳过。
+	segRe := regexp.MustCompile(`&&|\n+`)
+	out := make([]ExploreKind, 0, 16)
+	for _, seg := range segRe.Split(expanded, -1) {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
 		}
-		if len(out) > 0 {
-			return out
+		parts := strings.SplitN(seg, "::", 2)
+		if len(parts) != 2 {
+			continue
 		}
+		title := strings.TrimSpace(parts[0])
+		url := strings.TrimSpace(parts[1])
+		if title == "" || url == "" {
+			continue // 分组标题段（url 为空）
+		}
+		out = append(out, ExploreKind{Title: title, URL: url})
+	}
+	if len(out) > 0 {
+		return out
 	}
 	// 形态 4：纯 URL 兜底（含 ,{options} 尾缀——URL 整体保留）
 	if expanded != "" && strings.Contains(expanded, "/") {

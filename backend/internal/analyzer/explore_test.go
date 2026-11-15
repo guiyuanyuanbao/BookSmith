@@ -55,6 +55,24 @@ func TestAnalyzeExploreKinds_JSONForm(t *testing.T) {
 	}
 }
 
+// TestAnalyzeExploreKinds_AndSeparator legado 分隔语义 "(&&|\n)+"：除换行还支持 && 分隔多分类。
+func TestAnalyzeExploreKinds_AndSeparator(t *testing.T) {
+	rule := "玄幻::/xh/{{page}}.html&&都市::/ds/{{page}}.html&&完本::/wb/"
+	kinds := AnalyzeExploreKinds(rule, "http://example.com", &mockSourceRef{}, nil, nil)
+	if len(kinds) != 3 {
+		t.Fatalf("&& 分隔应解析 3 个分类，实际 %d: %+v", len(kinds), kinds)
+	}
+	if kinds[0].Title != "玄幻" || kinds[2].Title != "完本" {
+		t.Fatalf("分类错误: %+v", kinds)
+	}
+	// 混合分隔：&& 与换行混用
+	mixed := "玄幻::/xh/\n都市::/ds/&&科幻::/kh/"
+	kinds2 := AnalyzeExploreKinds(mixed, "http://example.com", &mockSourceRef{}, nil, nil)
+	if len(kinds2) != 3 {
+		t.Fatalf("混合分隔应解析 3 个分类，实际 %d", len(kinds2))
+	}
+}
+
 func TestAnalyzeExploreKinds_PureURLFallback(t *testing.T) {
 	// 纯 URL（无分类结构）→ 单分类兜底
 	kinds := AnalyzeExploreKinds("/latest/page/{{page}}", "http://example.com", &mockSourceRef{}, nil, nil)
