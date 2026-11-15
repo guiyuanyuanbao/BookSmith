@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Compass } from '@element-plus/icons-vue'
 import { api, coverProxy, type ExploreBook, type ExploreSourceInfo } from '@/api'
+import CoverThumb from '@/components/CoverThumb.vue'
 
 const router = useRouter()
 
@@ -197,13 +198,6 @@ function hideCover(ev: Event) {
   ;(ev.target as HTMLImageElement).style.visibility = 'hidden'
 }
 
-const phColors = ['#7fa89a', '#a58f7a', '#8f9a7a', '#9a7a8f', '#7a8f9a']
-function phColor(name: string) {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffff
-  return phColors[h % phColors.length]
-}
-
 loadSources()
 onBeforeUnmount(stopPoll)
 </script>
@@ -277,10 +271,7 @@ onBeforeUnmount(stopPoll)
         </div>
         <div class="explore-grid">
           <div v-for="(b, i) in books" :key="b.bookUrl + i" class="explore-card" @click="searchBook(b)">
-            <div class="cover">
-              <img v-if="coverOf(b)" :src="coverOf(b)!" loading="lazy" @error="hideCover" />
-              <span v-else class="cover-ph" :style="{ background: phColor(b.name) }">书</span>
-            </div>
+            <CoverThumb :src="coverOf(b)" :name="b.name" @error="hideCover" />
             <div class="explore-card-name" :title="b.name">{{ b.name }}</div>
             <div class="muted" style="font-size: 12px">{{ b.author || '未知' }}</div>
             <el-tag size="small" type="info" class="explore-card-src">{{ b.sourceName }}</el-tag>

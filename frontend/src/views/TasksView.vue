@@ -161,9 +161,7 @@ onBeforeUnmount(() => {
             <strong class="tc-name">{{ row.bookName }}</strong>
             <span class="tc-author muted">{{ row.author }}</span>
             <el-tag v-for="f in row.formats" :key="f" size="small" class="tc-fmt">{{ f.toUpperCase() }}</el-tag>
-            <span class="tc-status" :class="row.status">
-              <i class="dot" />{{ statusMap[row.status]?.text ?? row.status }}
-            </span>
+            <StatusPill :status="row.status" />
           </div>
           <el-progress
             :percentage="pct(row)"

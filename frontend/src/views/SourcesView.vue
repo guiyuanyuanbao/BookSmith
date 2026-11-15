@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
 import { api, subscribeEvents, type BookSource, type DebugTrace, type SourceRepo, type RepoProviderResult, type RepoSyncProgress, type ImportResult, type YioveSourcePage, type YioveSourceItem } from '@/api'
+import { fmtMs } from '@/composables/formatters'
 
 const items = ref<BookSource[]>([])
 const total = ref(0)
@@ -504,11 +505,6 @@ async function openDebug(bs: BookSource) {
   } finally {
     debugLoading.value = false
   }
-}
-
-function fmtMs(ms?: number) {
-  if (!ms) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
 
 onMounted(() => {

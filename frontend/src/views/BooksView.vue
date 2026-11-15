@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, coverProxy, subscribeEvents, withKey, type BookGroup, type Chapter, type SourceBook } from '@/api'
+import FmtTag from '@/components/FmtTag.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 import { useRouter } from 'vue-router'
@@ -816,9 +817,7 @@ onBeforeUnmount(() => {
           </div>
           <template v-else>
             <div v-for="e in groupExports" :key="e.id" class="export-file-row">
-              <el-tag size="small" :color="{txt:'#67c23a',epub:'#409eff',pdf:'#f56c6c',html:'#e6a23c',md:'#909399'}[e.format]" class="fmt-tag">
-                {{ e.format.toUpperCase() }}
-              </el-tag>
+              <FmtTag :format="e.format" />
               <span style="flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ e.name }}</span>
               <span class="muted" style="font-size: 12px">{{ e.size < 1048576 ? (e.size/1024).toFixed(1)+' KB' : (e.size/1048576).toFixed(2)+' MB' }}</span>
               <a :href="api.fileUrl(e)" target="_blank"><el-button type="primary" size="small">下载</el-button></a>
@@ -982,7 +981,6 @@ onBeforeUnmount(() => {
   border-bottom: 1px dashed var(--bs-border);
 }
 .export-file-row:last-of-type { border-bottom: none; }
-.fmt-tag { color: #fff; border: none; width: 54px; text-align: center; flex-shrink: 0; }
 .ms-row {
   display: flex;
   align-items: center;

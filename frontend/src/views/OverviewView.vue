@@ -3,20 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { api, type Overview } from '@/api'
 import { useRouter } from 'vue-router'
 
+import { fmtSize } from '@/composables/formatters'
 const router = useRouter()
 const data = ref<Overview | null>(null)
 const loading = ref(false)
-
-const taskStatusLabels: Record<string, string> = {
-  pending: '等待中', running: '进行中', paused: '已暂停', done: '已完成',
-  failed: '失败', canceled: '已取消', exporting: '导出中',
-}
-
-function fmtSize(n: number) {
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 
 /** 进行中任务数（running/pending/exporting） */
 const activeCount = computed(() => {

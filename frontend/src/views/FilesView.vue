@@ -3,6 +3,8 @@
 import { onMounted, ref, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
+import { fmtSize, fmtColor, FORMAT_COLORS } from '@/composables/formatters'
+import FmtTag from '@/components/FmtTag.vue'
 import { useTasksStore } from '@/stores/tasks'
 
 interface ExportItem {
@@ -21,10 +23,6 @@ const loading = ref(false)
 const keyword = ref('')
 const fmtFilter = ref('all')
 
-const fmtColors: Record<string, string> = {
-  txt: '#67c23a', epub: '#409eff', pdf: '#f56c6c', html: '#e6a23c', md: '#909399',
-}
-
 const filtered = computed(() => {
   let out = items.value
   if (keyword.value) {
@@ -37,12 +35,9 @@ const filtered = computed(() => {
   return out
 })
 
+const fmtNames = Object.keys(FORMAT_COLORS)
 const totalCount = computed(() => items.value.length)
 const totalSize = computed(() => items.value.reduce((s, e) => s + e.size, 0))
-
-function fmtSize(n: number) {
-  return n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`
-}
 
 function fmtTime(ts: number) {
   const d = new Date(ts)
@@ -105,7 +100,7 @@ const tasksStore = useTasksStore()
       <el-input v-model="keyword" placeholder="搜索文件名" style="width: 220px" clearable />
       <el-select v-model="fmtFilter" style="width: 110px">
         <el-option value="all" label="全部格式" />
-        <el-option v-for="(c, f) in fmtColors" :key="f" :value="f" :label="f.toUpperCase()" />
+        <el-option v-for="f in fmtNames" :key="f" :value="f" :label="f.toUpperCase()" />
       </el-select>
       <div class="spacer" />
       <el-button :disabled="!filtered.length" @click="downloadAll">全部下载</el-button>
@@ -117,9 +112,7 @@ const tasksStore = useTasksStore()
 
     <div v-else class="file-list">
       <div v-for="e in filtered" :key="e.id" class="file-row">
-        <el-tag size="small" :color="fmtColors[e.format] || '#909399'" class="fmt-tag">
-          {{ e.format.toUpperCase() }}
-        </el-tag>
+        <FmtTag :format="e.format" />
         <div class="file-main">
           <div class="file-name" :title="e.name">{{ e.name }}</div>
           <div class="muted file-meta">{{ fmtSize(e.size) }} · {{ fmtTime(e.createdAt) }}<template v-if="e.originName"> · 来源 {{ e.originName }}</template></div>
@@ -153,7 +146,6 @@ const tasksStore = useTasksStore()
 }
 .file-row:last-child { border-bottom: none; }
 .file-row:hover { background: var(--el-fill-color-light); }
-.fmt-tag { color: #fff; border: none; width: 54px; text-align: center; flex-shrink: 0; }
 .file-main { flex: 1; min-width: 0; }
 .file-name {
   font-size: 13.5px;

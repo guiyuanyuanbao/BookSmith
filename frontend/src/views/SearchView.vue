@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, VideoPause, CircleCheckFilled } from '@element-plus/icons-vue'
-import { api, coverProxy, subscribeEvents, type BookSource, type SearchJobState, type SearchOrigin, type SearchResult, type TocProbeResult } from '@/api'
+import { api, coverProxy, subscribeEvents, type BookSource, type SearchJobState, type SearchOrigin, type SearchResult } from '@/api'
+import { fmtMs } from '@/composables/formatters'
+import { useProbe } from '@/composables/useProbe'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 
@@ -209,115 +211,37 @@ const pickItem = ref<SearchResult | null>(null)
 const excludeOrigin = ref<string | null>(null)
 // 换源对话框打开时记住任务名，提交后清理对应 switching 标记由 submitDownload 统一处理
 
-// ---------- 目录探测：比源对话框内按需探测源质量 ----------
-const probeMap = ref<Record<string, TocProbeResult>>({})
-const probing = ref(false)
-const probeTotal = ref(0)
-const probeDone = ref(0)
+// ---------- 目录探测：比源对话框内按需探测源质量（状态机见 composables/useProbe） ----------
+const probe = useProbe()
+const probeMap = probe.probeMap
+const probing = probe.probing
+const probeTotal = probe.probeTotal
+const probeDone = probe.probeDone
+const probeCursor = probe.probeCursor
 
 async function onPickDialogOpen() {
-  probing.value = false
-  probeTotal.value = 0
-  probeDone.value = 0
+  // 仅清计数；同一本书重开对话框保留已探结果与游标（继续探测可接续）
+  probe.softReset()
 }
 
-// 探测源目录质量：按响应速度分批（每批 probeBatchSize 个）。
-// 首次自动探测：健康源达标即停（或达最多源数上限）；之后可手动「继续探测」不受阈值限制，探完剩余源。
-// probeCursor 记录已探测到的源位置（跨多次触发连续推进）
-const probeCursor = ref(0)
-// probeAborted：用户点「停止」后置位，探测循环尽快退出
-let probeAborted = false
-
-// startProbe(manual)：manual=false 为首次自动探测（健康即停）；
-// manual=true 为手动续探（用户对已探结果不满意，继续探完剩余源，不受阈值限制）
-async function startProbe(manual = false) {
-  if (probing.value || !pickItem.value) return
-  const all = [...pickItem.value.origins].sort((a, b) => (a.respondTime || 9999) - (b.respondTime || 9999))
-  if (!all.length) return
-  const BATCH = Math.max(1, settings.probeBatchSize)
-  // 自动模式的探测上限（手动续探不受限，探完剩余全部）
-  const MAX_TOTAL = Math.min(Math.max(1, settings.probeMaxSources), all.length)
-  const STOP_HEALTHY = Math.max(1, settings.probeStopHealthy)
-  // 自动模式：从头开始，达到健康阈值即停；手动续探：从上次位置继续，直到全部探完
-  let cursor = manual ? probeCursor.value : 0
-  if (cursor >= all.length) {
-    ElMessage.info('所有来源都已探测过')
-    return
-  }
-  probing.value = true
-  probeAborted = false
-  try {
-    let processed = 0
-    let healthyStop = false
-    while (cursor < all.length) {
-      const batch = all.slice(cursor, cursor + BATCH).map((o) => ({ sourceUrl: o.sourceUrl, bookUrl: o.bookUrl }))
-      probeTotal.value = Math.min(cursor + batch.length, all.length)
-      // 逐源请求（每源独立返回，失败不影响其他），保证 UI 持续更新
-      for (const src of batch) {
-        try {
-          const r = await api.probeToc(src.sourceUrl, src.bookUrl)
-          probeMap.value[src.sourceUrl] = r
-        } catch { /* 单源失败不阻塞 */ }
-        probeDone.value++
-        processed++
-        cursor++
-        // 用户点停止：立即结束（不处理本批剩余）
-        if (probeAborted) break
-        // 自动模式：健康数达标即停（手动模式不受阈值限制，探到全部或用户停止）
-        if (!manual) {
-          const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
-          if (okCount >= STOP_HEALTHY) { healthyStop = true; break }
-        }
-      }
-      if (healthyStop) break
-      // 自动模式在批间也响应上限与健康阈值；手动模式探完即止
-      if (probeAborted || cursor >= all.length) break
-      if (!manual) {
-        const okCount = Object.values(probeMap.value).filter((x) => x.ok).length
-        if (okCount >= STOP_HEALTHY) { healthyStop = true; break }
-        if (cursor >= MAX_TOTAL) break // 达到最多探测源数上限
-      }
-    }
-    probeCursor.value = cursor
-    if (probeAborted) {
-      ElMessage.info(`已停止探测（已探 ${probeDone.value} 个，可点「继续探测」接着探）`)
-    } else if (manual) {
-      ElMessage.success(`已继续探测 ${processed} 个来源（共探完 ${cursor}/${all.length}）`)
-    }
-  } catch (e: any) {
-    ElMessage.error('探测失败：' + e.message)
-  } finally {
-    probing.value = false
-    probeAborted = false
-  }
+function startProbe(manual = false) {
+  if (!pickItem.value) return
+  return probe.start(pickItem.value.name, pickItem.value.origins, manual)
 }
 
 function stopProbe() {
-  if (probing.value) probeAborted = true
+  probe.stop()
 }
 
 // 状态徽章：完结/连载/疑似缺章（与同书其他已探测源相对比较）
 function probeBadge(sourceUrl: string): { label: string; type: 'success' | 'warning' | 'info' } {
-  const res = probeMap.value[sourceUrl]
-  if (!res || !res.ok) return { label: '', type: 'info' }
-  // 与同书其他源对比：章节数 >= 最高已探测源的 90% 且有末章 → 完结倾向；显著偏少 → 疑似缺章
-  const totals = Object.values(probeMap.value).filter((r) => r.ok).map((r) => r.total)
-  const maxTotal = Math.max(...totals, 1)
-  const origin = pickItem.value?.origins.find((o) => o.sourceUrl === sourceUrl)
-  const kindText = (origin?.sourceName ? '' : '') + (pickItem.value?.origins.find((o) => o.sourceUrl === sourceUrl)?.latestChapter || '')
-  const lastMentioned = (res.lastChapters?.length ?? 0) > 0
-  if (res.total >= maxTotal * 0.9 && lastMentioned) return { label: '· 完整', type: 'success' }
-  if (res.total < maxTotal * 0.6) return { label: '· 疑似缺章', type: 'warning' }
-  return { label: '· 偏少', type: 'info' }
+  return probe.badge(probeMap.value, sourceUrl)
 }
 function openPick(item: SearchResult, excludeOriginUrl?: string) {
   pickItem.value = item
   excludeOrigin.value = excludeOriginUrl ?? null
   // 换书重置探测状态（不同书的探测结果互不通用）
-  probeMap.value = {}
-  probeDone.value = 0
-  probeTotal.value = 0
-  probeCursor.value = 0
+  probe.reset()
   // 换源场景预选第一个可用源，省一次点击
   pickDlg.value = true
   const first = item.origins.find((o) => o.sourceUrl !== excludeOriginUrl)
@@ -334,11 +258,6 @@ function pickSource(o: SearchOrigin) {
   dlFormats.value = [...settings.defaultFormats]
   dlConcurrency.value = settings.concurrency
   dlRange.value = [1, 0]
-}
-
-function fmtMs(ms?: number) {
-  if (!ms) return '—'
-  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
 
 // 选源下载对话框状态
