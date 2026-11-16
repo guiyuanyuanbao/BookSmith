@@ -772,7 +772,7 @@ onMounted(() => {
                     :total="yioveListData?.total ?? 0"
                     :page-size="20"
                     :current-page="yioveListPage"
-                    @current-change="loadYioveList"
+                    @current-change="onYiovePageChange"
                   />
                 </div>
               </template>

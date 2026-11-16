@@ -220,7 +220,7 @@ func (m *Manager) run(taskID int64, book *model.Book, bs *model.BookSource) {
 	_ = m.st.UpdateTask(t)
 	m.publish(t, "task.progress", "获取目录中")
 
-	chapters, total, rangeEnd, tocErr := m.fetchToc(t, book, bs)
+	chapters, total, _, tocErr := m.fetchToc(t, book, bs)
 	if tocErr != nil {
 		// 自动换源：目录失败时依次尝试候选源（快捷下载注入；显式选源不启用）
 		if len(t.CandidateSources) > 0 {
@@ -238,7 +238,7 @@ func (m *Manager) run(taskID int64, book *model.Book, bs *model.BookSource) {
 				book.Origin = cand.SourceURL
 				book.OriginName = cand.SourceName
 				book.BookURL = cand.BookURL
-				chapters, total, rangeEnd, tocErr = m.fetchToc(t, book, candBs)
+				chapters, total, _, tocErr = m.fetchToc(t, book, candBs)
 				if tocErr == nil {
 					bs = candBs
 					t.TriedSources = append(t.TriedSources, model.TriedSource{SourceName: cand.SourceName, Err: ""})
@@ -286,7 +286,7 @@ func (m *Manager) run(taskID int64, book *model.Book, bs *model.BookSource) {
 
 	// ---------- 阶段 2：正文 ----------
 	t.TotalChapters = total
-	t.RangeEnd = rangeEnd
+	// t.RangeStart/End 已由 fetchToc 换算为全列表 idx 窗口（含卷坐标系，与统计口径一致），勿再覆盖
 	t.Phase = "content"
 	_ = m.st.UpdateTask(t)
 
@@ -402,8 +402,34 @@ func (m *Manager) fetchToc(t *model.DownloadTask, book *model.Book, bs *model.Bo
 	if rangeStart > rangeEnd {
 		return nil, 0, 0, fmt.Errorf("章节范围无效（共 %d 章）", contentCount)
 	}
+	// 把正文坐标区间换算为全列表 idx 窗口写回任务：chapters.idx 含卷行（卷也有 DB 记录），
+	// runContent 过滤与 bumpProgress 统计必须共用同一坐标系，否则含卷书源窗口整体错位、
+	// 全本下载进度条也停在 <100%（尾部正文 idx 落在 [0, contentCount-1] 之外）
+	idxStart, idxEnd := -1, -1
+	ci := -1
+	for _, ch := range chapters {
+		if ch.IsVolume {
+			continue
+		}
+		ci++
+		if ci < rangeStart {
+			continue
+		}
+		if idxStart < 0 {
+			idxStart = ch.Index
+		}
+		if ci <= rangeEnd {
+			idxEnd = ch.Index
+		} else {
+			break
+		}
+	}
+	if idxStart >= 0 && idxEnd >= idxStart {
+		t.RangeStart = idxStart
+		t.RangeEnd = idxEnd
+	}
 	total := rangeEnd - rangeStart + 1
-	return chapters, total, rangeEnd, nil
+	return chapters, total, idxEnd, nil
 }
 
 // runContent 并发抓取正文。
@@ -417,15 +443,13 @@ func (m *Manager) runContent(ctx context.Context, t *model.DownloadTask, book *m
 		}
 	}
 
-	// 待下载章节序号（跳过卷；跳过区间外）
+	// 待下载章节序号（跳过卷；跳过窗口外——t.RangeStart/End 已是全列表 idx 坐标，见 fetchToc）
 	indexes := make([]int, 0, t.TotalChapters)
-	contentIdx := -1
 	for _, ch := range chapters {
 		if ch.IsVolume {
 			continue
 		}
-		contentIdx++
-		if contentIdx < t.RangeStart || contentIdx > t.RangeEnd {
+		if ch.Index < t.RangeStart || ch.Index > t.RangeEnd {
 			continue
 		}
 		// 已完成的章节跳过（断点续传）

@@ -136,7 +136,7 @@ async function loadHistory() {
 }
 
 /** 发起搜索。返回 false 表示被空关键词/loading 守卫拒绝（调用方据此回滚 pending 状态） */
-async function doSearch(): Promise<boolean> {
+function doSearch(): boolean {
   const key = keyword.value.trim()
   if (!key) {
     ElMessage.warning('请输入书名或作者')
@@ -146,6 +146,13 @@ async function doSearch(): Promise<boolean> {
     ElMessage.warning('当前搜索仍在进行中，请等待完成或取消')
     return false
   }
+  void runSearch()
+  return true
+}
+
+/** 实际搜索流程（doSearch 同步守卫通过后 fire-and-forget） */
+async function runSearch() {
+  const key = keyword.value.trim()
   started.value = true
   loading.value = true
   job.value = null
@@ -176,13 +183,11 @@ async function doSearch(): Promise<boolean> {
     api.addSearchHistory(key).then(() => loadHistory()).catch(() => {})
     startPolling()
     await poll()
-    return true
   } catch (e: any) {
     ElMessage.error(e.message)
     loading.value = false
     closeSSE?.()
     closeSSE = null
-    return false
   }
 }
 
