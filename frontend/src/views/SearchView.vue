@@ -450,7 +450,7 @@ onBeforeUnmount(() => {
     <template v-if="!started">
       <!-- Hero：居中搜索 -->
       <div class="hero">
-        <div class="hero-logo">📚</div>
+        <img class="hero-logo" src="/logo.svg" alt="BookSmith" />
         <h1 class="hero-title">BookSmith</h1>
         <p class="hero-tagline">跨书源聚合搜索 · 自动去重 · 一键下载制作电子书</p>
         <div class="hero-search">
@@ -462,14 +462,15 @@ onBeforeUnmount(() => {
             @keyup.enter="doSearch"
           >
             <template #append>
-              <el-button :icon="Search" :loading="loading" @click="doSearch">搜索</el-button>
+              <el-button class="hero-search-btn" :icon="Search" :loading="loading" @click="doSearch">搜索</el-button>
             </template>
           </el-input>
         </div>
         <div class="hero-scope">
-          <el-button size="small" :type="scopeActive ? 'primary' : 'default'" plain @click="openScopePanel">
-            搜索范围{{ scopeActive ? `（${scopeMode === 'include' ? '仅用' : '屏蔽'} ${scopeSelectedSources.length + scopeSelectedGroups.length} 项）` : '：全部源' }}
-          </el-button>
+          <button class="scope-chip" :class="{ active: scopeActive }" @click="openScopePanel">
+            <span class="scope-dot" />
+            {{ scopeActive ? `仅用/屏蔽 ${scopeSelectedSources.length + scopeSelectedGroups.length} 项` : '搜索范围：全部源' }}
+          </button>
           <el-button v-if="scopeActive" size="small" text @click="clearScope">重置</el-button>
         </div>
         <!-- 范围选择面板 -->
@@ -528,9 +529,10 @@ onBeforeUnmount(() => {
         </template>
       </el-input>
       <el-button v-if="loading" :icon="VideoPause" @click="cancelSearch">取消</el-button>
-      <el-button size="small" :type="scopeActive ? 'primary' : 'default'" plain @click="openScopePanel">
-        搜索范围{{ scopeActive ? `（${scopeMode === 'include' ? '仅用' : '屏蔽'} ${scopeSelectedSources.length + scopeSelectedGroups.length} 项）` : '：全部源' }}
-      </el-button>
+      <button class="scope-chip" :class="{ active: scopeActive }" @click="openScopePanel">
+        <span class="scope-dot" />
+        {{ scopeActive ? `仅用/屏蔽 ${scopeSelectedSources.length + scopeSelectedGroups.length} 项` : '搜索范围：全部源' }}
+      </button>
       <el-button v-if="scopeActive" size="small" text @click="clearScope">重置</el-button>
       <div class="spacer" />
       <!-- 结果页范围面板（与 hero 共用状态） -->
@@ -824,7 +826,7 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   width: 100%;
 }
-.hero-logo { font-size: 56px; margin-bottom: 8px; }
+.hero-logo { width: 64px; height: 64px; margin: 0 auto 10px; display: block; }
 .hero-title {
   font-family: 'Noto Serif SC', serif;
   font-size: 40px;
@@ -838,8 +840,54 @@ onBeforeUnmount(() => {
   font-size: 15px;
   margin: 0 0 32px;
 }
-.hero-search { margin-bottom: 12px; }
-.hero-scope { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
+.hero-search { margin-bottom: 14px; }
+/* append 内搜索按钮：主题色实心（默认浅灰太弱，主操作不突出） */
+.hero-search :deep(.el-input__wrapper) { padding-right: 4px; }
+.hero-search :deep(.hero-search-btn) {
+  background: var(--el-color-primary);
+  border: none;
+  color: #fff;
+  padding: 18px 22px;
+  font-weight: 600;
+  border-radius: 9px;
+}
+.hero-search :deep(.hero-search-btn:hover) {
+  background: var(--bs-primary-light);
+  color: #fff;
+}
+.hero-scope { margin-bottom: 12px; display: flex; gap: 8px; align-items: center; justify-content: center; }
+
+/* 范围胶囊：状态点 + 文字，active 时主题色描边+浅底 */
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--bs-border);
+  background: var(--bs-card);
+  color: var(--bs-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.15s ease;
+}
+.scope-chip:hover { border-color: var(--bs-primary-light); transform: translateY(-1px); }
+.scope-chip:active { transform: scale(0.97); }
+.scope-chip.active {
+  border-color: var(--el-color-primary);
+  background: var(--bs-primary-bg);
+  color: var(--bs-primary);
+  font-weight: 600;
+}
+.scope-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bs-text-sub);
+  flex-shrink: 0;
+  transition: background 0.18s ease;
+}
+.scope-chip.active .scope-dot { background: var(--el-color-primary); }
 .scope-panel {
   background: var(--bs-card, #fff);
   border: 1px solid var(--bs-border, #e5e7eb);

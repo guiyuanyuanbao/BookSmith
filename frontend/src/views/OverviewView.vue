@@ -148,11 +148,22 @@ export default {}
   display: flex;
   flex-direction: column;
   gap: 2px;
-  transition: background 0.2s ease, transform 0.2s ease;
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
   backdrop-filter: blur(4px);
 }
-.hstat:hover { background: rgba(255, 255, 255, 0.18); transform: translateY(-2px); }
-.hstat-num { font-size: 26px; font-weight: 700; color: #fff; line-height: 1.1; }
+.hstat:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.28);
+  transform: translateY(-2px);
+}
+.hstat:active { transform: translateY(0) scale(0.98); }
+.hstat-num {
+  font-size: 26px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
 .hstat-label { font-size: 12.5px; color: rgba(245, 242, 234, 0.9); }
 .hstat-sub { font-size: 11px; color: rgba(245, 242, 234, 0.55); }
 
@@ -173,18 +184,31 @@ export default {}
   cursor: pointer;
   text-align: left;
   box-shadow: var(--bs-shadow);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .launcher:hover {
   transform: translateY(-3px);
+  border-color: var(--bs-primary-light);
   box-shadow: var(--bs-shadow-hover);
 }
-.launcher:hover .l-arrow { transform: translateX(4px); }
-.l-icon { font-size: 26px; }
+.launcher:active { transform: translateY(-1px) scale(0.99); }
+.launcher:hover .l-arrow { transform: translateX(4px); color: var(--bs-primary); }
+/* 图标容器化：emoji 收进主题色浅底圆角块，替代裸放 */
+.l-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: var(--bs-primary-bg);
+  border-radius: 12px;
+}
 .l-body { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .l-title { font-size: 15px; font-weight: 600; color: var(--bs-text); }
 .l-desc { font-size: 12.5px; color: var(--bs-text-sub); }
-.l-arrow { color: var(--bs-text-sub); transition: transform 0.2s ease; }
+.l-arrow { color: var(--bs-text-sub); transition: transform 0.2s ease, color 0.2s ease; }
 
 .home-foot { text-align: center; margin-top: 26px; }
 
