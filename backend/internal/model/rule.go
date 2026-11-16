@@ -146,8 +146,13 @@ type DownloadTask struct {
 	OriginName    string     `json:"originName,omitempty"`
 	Status        TaskStatus `json:"status"`
 	Formats       []string   `json:"formats"`    // 导出格式：txt/epub/pdf/html/md
-	RangeStart    int        `json:"rangeStart"` // 起始章（0 基，含）
+	RangeStart    int        `json:"rangeStart"` // 起始章（0 基，含）——fetchToc 换算后为全列表 idx 窗口，供 runContent/bumpProgress 消费
 	RangeEnd      int        `json:"rangeEnd"`   // 结束章（0 基，含；-1 表示到最后）
+	// 用户原始正文坐标（0 基，跳过卷计数）。fetchToc 就地改写 RangeStart/End 后，
+	// 恢复/重跑会把持久化的 idx 值再当正文序二次换算（窗口前移丢章）——原始值单独保存，
+	// Resume/RetryFailed/run 重拉目录时用它做幂等换算。
+	RawRangeStart int `json:"rawRangeStart,omitempty"`
+	RawRangeEnd   int `json:"rawRangeEnd,omitempty"`
 	Concurrency   int        `json:"concurrency"`
 	TotalChapters int        `json:"totalChapters"`
 	DoneChapters  int        `json:"doneChapters"`

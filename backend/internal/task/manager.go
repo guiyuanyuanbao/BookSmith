@@ -155,17 +155,19 @@ func (m *Manager) Create(_ context.Context, book *model.Book, bs *model.BookSour
 		rangeEnd = -1
 	}
 	t := &model.DownloadTask{
-		BookID:      bookID,
-		BookName:    book.Name,
-		Author:      book.Author,
-		Origin:      bs.BookSourceURL,
-		OriginName:  bs.BookSourceName,
-		Status:      model.TaskPending,
-		Phase:       "toc",
-		Formats:     formats,
-		RangeStart:  rangeStart,
-		RangeEnd:    rangeEnd,
-		Concurrency: concurrency,
+		BookID:        bookID,
+		BookName:      book.Name,
+		Author:        book.Author,
+		Origin:        bs.BookSourceURL,
+		OriginName:    bs.BookSourceName,
+		Status:        model.TaskPending,
+		Phase:         "toc",
+		Formats:       formats,
+		RangeStart:    rangeStart,
+		RangeEnd:      rangeEnd,
+		RawRangeStart: rangeStart, // 原始正文坐标另存：fetchToc 会把 Range* 改写为 idx 窗口
+		RawRangeEnd:   rangeEnd,
+		Concurrency:   concurrency,
 	}
 	if len(opts) > 0 && len(opts[0].CandidateSources) > 0 {
 		t.CandidateSources = opts[0].CandidateSources
@@ -405,7 +407,16 @@ func (m *Manager) fetchToc(t *model.DownloadTask, book *model.Book, bs *model.Bo
 	}
 	// 把正文坐标区间换算为全列表 idx 窗口写回任务：chapters.idx 含卷行（卷也有 DB 记录），
 	// runContent 过滤与 bumpProgress 统计必须共用同一坐标系，否则含卷书源窗口整体错位、
-	// 全本下载进度条也停在 <100%（尾部正文 idx 落在 [0, contentCount-1] 之外）
+	// 全本下载进度条也停在 <100%（尾部正文 idx 落在 [0, contentCount-1] 之外）。
+	// 幂等性：Range* 字段会被就地改写为 idx 坐标，恢复/重跑再进 fetchToc 会把 idx 当正文序
+	// 二次换算（窗口前移丢章）——原始正文坐标存在 RawRange*，每次换算都从它出发。
+	userStart, userEnd := t.RawRangeStart, t.RawRangeEnd
+	if userStart <= 0 && userEnd <= 0 {
+		// 旧任务（Raw 字段未持久化）：首跑时 Raw==0 且 Range==原始值，回退用当前 range*
+		// 仅全本（-1/-1）与区间两种形态，换算前 range* 尚未被本函数改写，值即原始坐标
+		userStart, userEnd = rangeStart, rangeEnd
+		t.RawRangeStart, t.RawRangeEnd = userStart, userEnd
+	}
 	idxStart, idxEnd := -1, -1
 	ci := -1
 	for _, ch := range chapters {
@@ -413,13 +424,13 @@ func (m *Manager) fetchToc(t *model.DownloadTask, book *model.Book, bs *model.Bo
 			continue
 		}
 		ci++
-		if ci < rangeStart {
+		if ci < userStart {
 			continue
 		}
 		if idxStart < 0 {
 			idxStart = ch.Index
 		}
-		if ci <= rangeEnd {
+		if ci <= userEnd {
 			idxEnd = ch.Index
 		} else {
 			break
@@ -579,9 +590,10 @@ func (m *Manager) bumpProgress(taskID int64) {
 	if err != nil {
 		return
 	}
-	// 区间下载时只统计区间内章节：全书口径会让 done 远大于区间 total（进度条倒挂）
+	// 区间下载时只统计区间内章节：全书口径会让 done 远大于区间 total（进度条倒挂）。
+	// RangeEnd==0 是合法窗口（换算后首个正文章 idx=0），仅 -1 哨兵走全书口径
 	var done, failed int
-	if t.RangeStart >= 0 && t.RangeEnd > 0 {
+	if t.RangeStart >= 0 && t.RangeEnd >= 0 {
 		total, d, f, _ := m.st.CountChapterStatusRange(t.BookID, int64(t.RangeStart), int64(t.RangeEnd))
 		done, failed = d, f
 		_ = total

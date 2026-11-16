@@ -192,7 +192,7 @@ onBeforeUnmount(() => {
     <div class="task-list" v-loading="loading">
       <div v-for="row in filteredTasks" :key="row.id" class="task-card" :data-status="row.status">
         <!-- 进度环：视觉锚点，颜色随状态 -->
-        <div class="tc-ring" :style="{ '--ring': ringColor(row) }">
+        <div class="tc-ring">
           <el-progress
             type="dashboard"
             :percentage="pct(row)"
@@ -228,8 +228,10 @@ onBeforeUnmount(() => {
               <span class="tc-err">{{ row.errMsg }}</span>
             </el-tooltip>
           </div>
-          <!-- 细进度线（环的补充：用于直观比较各任务相对进度） -->
-          <div class="tc-bar"><div class="tc-bar-fill" :style="{ width: pct(row) + '%', background: ringColor(row) }" :class="{ striped: row.status === 'running' }" /></div>
+          <!-- 细进度线（环的补充：用于直观比较各任务相对进度）。
+               内联必须用 background-color 长写：background 简写会带 background-image:none，
+               把 .striped 的流动条纹动画整个杀掉 -->
+          <div class="tc-bar"><div class="tc-bar-fill" :style="{ width: pct(row) + '%', backgroundColor: ringColor(row) }" :class="{ striped: row.status === 'running' }" /></div>
         </div>
 
         <!-- 操作区（无按钮时不渲染，避免空容器产生死间隙） -->
@@ -244,7 +246,10 @@ onBeforeUnmount(() => {
           >
             恢复
           </el-button>
-          <el-button v-if="row.failChapters > 0" size="small" type="warning" plain round @click="action(row, 'retry')">
+          <el-button
+            v-if="row.failChapters > 0 && !['running', 'pending', 'exporting'].includes(row.status)"
+            size="small" type="warning" plain round @click="action(row, 'retry')"
+          >
             重跑失败
           </el-button>
           <el-button
@@ -272,7 +277,9 @@ onBeforeUnmount(() => {
       </el-table>
       <template #footer>
         <el-button @click="failDlg = false">关闭</el-button>
+        <!-- 任务在途时重跑会被后端状态守卫拒绝（400），隐藏而非禁用以免误导 -->
         <el-button
+          v-if="failTask && !['running', 'pending', 'exporting'].includes(failTask.status)"
           type="warning"
           @click="
             failTask && action(failTask, 'retry');
