@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -749,8 +750,20 @@ func (m *Manager) doExport(taskID int64, book *model.Book, formats []string) (re
 			// 最后登记现存文件，DB 与磁盘保持一致
 			err2 := os.Rename(sf.path, fp)
 			if err2 != nil {
-				if data, rerr := os.ReadFile(sf.path); rerr == nil {
-					err2 = os.WriteFile(fp, data, 0o644)
+				// 流式回拷：成品可达数百 MB，整读进内存会瞬时翻倍峰值
+				src, rerr := os.Open(sf.path)
+				if rerr == nil {
+					dst, werr := os.Create(fp)
+					if werr == nil {
+						_, err2 = io.Copy(dst, src)
+						if cerr := dst.Close(); err2 == nil {
+							err2 = cerr
+						}
+					}
+					src.Close()
+				}
+				if err2 != nil {
+					_ = os.Remove(fp) // 半成品清掉，避免登记到悬空路径
 				}
 			}
 			if err2 == nil {
