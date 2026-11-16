@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"booksmith/internal/model"
 )
@@ -257,5 +259,48 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	out["exports"] = map[string]any{"count": len(exports), "totalSize": totalSize, "byFormat": byFormat}
 
+	// 净化规则
+	ruleTotal, _ := s.app.Store.ReplaceRuleCount()
+	ruleEnabled := 0
+	if rules, err := s.app.Store.ListReplaceRules(true); err == nil {
+		ruleEnabled = len(rules)
+	}
+	out["rules"] = map[string]any{"total": ruleTotal, "enabled": ruleEnabled}
+
+	// 数据目录占用（5 分钟缓存：全盘 WalkDir 每次请求跑太重）
+	out["storage"] = map[string]any{"bytes": s.dataDirSize()}
+
 	writeOK(w, out)
+}
+
+// storageSizeCache 数据目录大小缓存（周期内复用，避免概览高频请求反复扫盘）
+var (
+	storageSizeMu  sync.Mutex
+	storageSizeVal int64
+	storageSizeAt  time.Time
+	storageSizeTTL = 5 * time.Minute
+)
+
+// dataDirSize 统计数据目录总占用（books/downloads/covers/cache 全部子目录）。
+func (s *Server) dataDirSize() int64 {
+	storageSizeMu.Lock()
+	defer storageSizeMu.Unlock()
+	if time.Since(storageSizeAt) < storageSizeTTL && storageSizeAt.After(time.Time{}) {
+		return storageSizeVal
+	}
+	var total int64
+	_ = filepath.WalkDir(s.app.DataDir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // 跳过无权限/已消失的条目
+		}
+		if !d.IsDir() {
+			if fi, err := d.Info(); err == nil {
+				total += fi.Size()
+			}
+		}
+		return nil
+	})
+	storageSizeVal = total
+	storageSizeAt = time.Now()
+	return total
 }

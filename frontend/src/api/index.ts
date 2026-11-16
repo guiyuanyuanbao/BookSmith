@@ -181,6 +181,8 @@ export interface Overview {
   books: { count: number; totalChapters: number; cachedChapters: number }
   tasks: { recent: number; byStatus: Record<string, number> }
   exports: { count: number; totalSize: number; byFormat: Record<string, number> }
+  rules: { total: number; enabled: number }
+  storage: { bytes: number }
 }
 
 export interface Book {
