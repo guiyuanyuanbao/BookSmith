@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, subscribeEvents, type Chapter, type DownloadTask } from '@/api'
-import StatusPill from '@/components/StatusPill.vue'
+import { fmtColor } from '@/composables/formatters'
 
 const tasks = ref<DownloadTask[]>([])
 const filterTab = ref<'all' | 'active' | 'done'>('all')
@@ -11,13 +11,21 @@ let timer: number | null = null
 let closeSSE: (() => void) | null = null
 const startTimes = new Map<number, number>()
 
+const STATUS_TEXT: Record<string, string> = {
+  running: '下载中', pending: '排队中', paused: '已暂停', exporting: '导出中',
+  done: '已完成', failed: '失败', canceled: '已取消',
+}
+// 运行子阶段描述（仅 running/pending 时有意义）
 const phaseText = (t: DownloadTask) => {
-  if (t.status === 'running' || t.status === 'pending') {
-    if (t.phase === 'toc') return '获取目录'
-    if (t.phase === 'content') return '下载正文'
-  }
-  if (t.status === 'exporting' || t.phase === 'export') return '导出文件'
+  if (t.phase === 'toc') return '获取目录'
+  if (t.phase === 'content') return '下载正文'
+  if (t.phase === 'export') return '导出文件'
   return ''
+}
+// 状态文字以任务状态为准（phase 只是运行中的子阶段描述；失败任务的 export phase 不该盖过「失败」）
+const statusTextOf = (t: DownloadTask) => {
+  if ((t.status === 'running' || t.status === 'pending') && phaseText(t)) return phaseText(t)
+  return STATUS_TEXT[t.status] ?? t.status
 }
 
 function speedOf(t: DownloadTask): string {
@@ -90,6 +98,19 @@ function pct(t: DownloadTask) {
   return Math.min(100, Math.round(((t.doneChapters + t.failChapters) / t.totalChapters) * 100))
 }
 
+// 进度环颜色随状态（与 StatusPill 同一语义色）
+const ringColor = (t: DownloadTask) => {
+  switch (t.status) {
+    case 'running': case 'exporting': return 'var(--bs-primary)'
+    case 'paused': return 'var(--bs-accent)'
+    case 'failed': return 'var(--bs-danger)'
+    case 'done': return 'var(--bs-success)'
+    default: return 'var(--bs-text-sub)'
+  }
+}
+// 终态环内显示 ✓ / ✕，进行中显示百分比
+const ringDone = (t: DownloadTask) => t.status === 'done' || t.status === 'canceled' || t.status === 'failed'
+
 // 失败章节对话框
 const failDlg = ref(false)
 const failList = ref<Chapter[]>([])
@@ -146,31 +167,49 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="task-list" v-loading="loading">
-      <div v-for="row in filteredTasks" :key="row.id" class="task-card">
+      <div v-for="row in filteredTasks" :key="row.id" class="task-card" :data-status="row.status">
+        <!-- 进度环：视觉锚点，颜色随状态 -->
+        <div class="tc-ring" :style="{ '--ring': ringColor(row) }">
+          <el-progress
+            type="dashboard"
+            :percentage="pct(row)"
+            :width="64"
+            :stroke-width="7"
+            :show-text="false"
+            :color="ringColor(row)"
+          />
+          <div class="tc-ring-inner">
+            <span v-if="ringDone(row)" class="tc-ring-mark" :class="row.status">{{ row.status === 'done' ? '✓' : row.status === 'failed' ? '✕' : '⨯' }}</span>
+            <span v-else class="tc-ring-pct">{{ pct(row) }}<small>%</small></span>
+          </div>
+        </div>
+
+        <!-- 主信息 -->
         <div class="tc-main">
           <div class="tc-title-row">
             <strong class="tc-name">{{ row.bookName }}</strong>
-            <span class="tc-author muted">{{ row.author }}</span>
-            <el-tag v-for="f in row.formats" :key="f" size="small" class="tc-fmt">{{ f.toUpperCase() }}</el-tag>
-            <StatusPill :status="row.status" />
+            <span class="tc-author muted">{{ row.author || '未知作者' }}</span>
+            <span class="tc-fmt-list">
+              <span v-for="f in row.formats" :key="f" class="tc-fmt" :style="{ background: fmtColor(f) }">{{ f.toUpperCase() }}</span>
+            </span>
+            <span class="tc-status-text" :class="row.status">{{ statusTextOf(row) }}</span>
+            <span class="tc-id">#{{ row.id }}</span>
           </div>
-          <el-progress
-            :percentage="pct(row)"
-            :status="row.failChapters > 0 ? 'warning' : undefined"
-            :stroke-width="10"
-            :show-text="false"
-            class="tc-progress"
-          />
-          <div class="tc-meta muted">
+          <div class="tc-meta">
             <span>{{ row.doneChapters }}/{{ row.totalChapters }} 章</span>
-            <span v-if="row.failChapters > 0" class="tc-fail">失败 {{ row.failChapters }}</span>
+            <template v-if="row.failChapters > 0">
+              <span class="tc-fail" @click="showFailures(row)">失败 {{ row.failChapters }}（点击查看）</span>
+            </template>
             <span v-if="speedOf(row)">{{ speedOf(row) }}</span>
-            <span v-if="phaseText(row)">{{ phaseText(row) }}</span>
             <el-tooltip v-if="row.errMsg" :content="row.errMsg" placement="top" :show-after="300">
               <span class="tc-err">{{ row.errMsg }}</span>
             </el-tooltip>
           </div>
+          <!-- 细进度线（环的补充：用于直观比较各任务相对进度） -->
+          <div class="tc-bar"><div class="tc-bar-fill" :style="{ width: pct(row) + '%', background: ringColor(row) }" :class="{ striped: row.status === 'running' }" /></div>
         </div>
+
+        <!-- 操作区 -->
         <div class="tc-ops">
           <el-button v-if="row.status === 'running' || row.status === 'pending'" size="small" round @click="action(row, 'pause')">
             暂停
@@ -185,9 +224,6 @@ onBeforeUnmount(() => {
           <el-button v-if="row.failChapters > 0" size="small" type="warning" plain round @click="action(row, 'retry')">
             重跑失败
           </el-button>
-          <el-button v-if="row.failChapters > 0" size="small" round @click="showFailures(row)">
-            详情
-          </el-button>
           <el-button
             v-if="!['done', 'canceled'].includes(row.status)"
             size="small" type="danger" plain round
@@ -196,7 +232,6 @@ onBeforeUnmount(() => {
             取消
           </el-button>
         </div>
-        <div class="tc-id muted">#{{ row.id }}</div>
       </div>
     </div>
 
@@ -225,43 +260,115 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.task-list { display: flex; flex-direction: column; gap: 14px; }
+.task-list { display: flex; flex-direction: column; gap: 12px; }
 .task-card {
   background: var(--bs-card);
   border: 1px solid var(--bs-border);
   border-radius: var(--bs-radius);
-  padding: 18px 22px;
+  padding: 14px 18px;
   box-shadow: var(--bs-shadow);
   display: flex;
   align-items: center;
-  gap: 18px;
-  transition: box-shadow 0.2s ease;
+  gap: 16px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .task-card:hover { box-shadow: var(--bs-shadow-hover); }
-.tc-main { flex: 1; min-width: 0; }
+/* 终态卡片弱化：降低存在感，视觉焦点留给进行中任务 */
+.task-card[data-status='done'], .task-card[data-status='canceled'] { opacity: 0.72; }
+.task-card[data-status='done']:hover, .task-card[data-status='canceled']:hover { opacity: 1; }
+
+/* ---- 进度环 ---- */
+.tc-ring { position: relative; width: 64px; height: 64px; flex-shrink: 0; }
+.tc-ring :deep(.el-progress__text) { display: none; }
+.tc-ring-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.tc-ring-pct { font-size: 15px; font-weight: 700; color: var(--bs-text); line-height: 1; }
+.tc-ring-pct small { font-size: 10px; font-weight: 600; color: var(--bs-text-sub); margin-left: 1px; }
+.tc-ring-mark { font-size: 20px; font-weight: 700; line-height: 1; }
+.tc-ring-mark.done { color: var(--bs-success); }
+.tc-ring-mark.failed { color: var(--bs-danger); }
+.tc-ring-mark.canceled { color: var(--bs-text-sub); }
+
+/* ---- 主信息 ---- */
+.tc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 .tc-title-row {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
-.tc-name { font-size: 15px; }
-.tc-author { font-size: 12.5px; }
-.tc-fmt { flex-shrink: 0; }
-.tc-progress { max-width: 460px; }
-.tc-meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
-.tc-fail { color: var(--bs-danger); }
+.tc-name {
+  font-size: 15px;
+  font-family: 'Noto Serif SC', serif;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tc-author { font-size: 12.5px; flex-shrink: 0; }
+.tc-fmt-list { display: inline-flex; gap: 4px; flex-shrink: 0; }
+.tc-fmt {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  padding: 1.5px 6px;
+  border-radius: 5px;
+  letter-spacing: 0.3px;
+}
+.tc-status-text { font-size: 12.5px; font-weight: 600; margin-left: auto; flex-shrink: 0; }
+.tc-status-text.running, .tc-status-text.exporting { color: var(--bs-primary); }
+.tc-status-text.paused { color: var(--bs-accent); }
+.tc-status-text.done { color: var(--bs-success); }
+.tc-status-text.failed { color: var(--bs-danger); }
+.tc-id { font-size: 11px; color: var(--bs-text-sub); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+.tc-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--bs-text-sub);
+  min-width: 0;
+}
+.tc-fail { color: var(--bs-danger); cursor: pointer; }
+.tc-fail:hover { text-decoration: underline; }
 .tc-err {
-  max-width: 220px;
+  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: help;
 }
-.tc-side { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.tc-ops { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.tc-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--el-fill-color);
+  overflow: hidden;
+}
+.tc-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.5s ease;
+}
+.tc-bar-fill.striped {
+  background-image: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.28) 25%, transparent 25%,
+    transparent 50%, rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.28) 75%, transparent 75%
+  );
+  background-size: 14px 14px;
+  animation: tc-stripes 0.9s linear infinite;
+}
+@keyframes tc-stripes {
+  to { background-position: 14px 0; }
+}
 
-.tc-id { position: absolute; right: 14px; top: 10px; font-size: 11px; }
-.task-card { position: relative; }
+/* ---- 操作区 ---- */
+.tc-ops { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
 </style>
