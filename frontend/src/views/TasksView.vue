@@ -125,6 +125,13 @@ async function showFailures(t: DownloadTask) {
   }
 }
 
+// 是否存在可显示的操作按钮（终态卡无按钮时整个容器不渲染，省掉 16px 死间隙）
+function hasOps(t: DownloadTask) {
+  return (
+    t.status === 'running' || t.status === 'pending' || t.status === 'paused' || t.status === 'failed' || t.failChapters > 0
+  )
+}
+
 let progressTimer: number | null = null
 
 onMounted(() => {
@@ -209,8 +216,8 @@ onBeforeUnmount(() => {
           <div class="tc-bar"><div class="tc-bar-fill" :style="{ width: pct(row) + '%', background: ringColor(row) }" :class="{ striped: row.status === 'running' }" /></div>
         </div>
 
-        <!-- 操作区 -->
-        <div class="tc-ops">
+        <!-- 操作区（无按钮时不渲染，避免空容器产生死间隙） -->
+        <div v-if="hasOps(row)" class="tc-ops">
           <el-button v-if="row.status === 'running' || row.status === 'pending'" size="small" round @click="action(row, 'pause')">
             暂停
           </el-button>
@@ -260,7 +267,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.task-list { display: flex; flex-direction: column; gap: 12px; }
+/* 16px 上边距：sub→toolbar 24px / toolbar→list 16px / 卡间 14px 的递减节律 */
+.task-list { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
 .task-card {
   background: var(--bs-card);
   border: 1px solid var(--bs-border);
@@ -269,16 +277,19 @@ onBeforeUnmount(() => {
   box-shadow: var(--bs-shadow);
   display: flex;
   align-items: center;
-  gap: 16px;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  gap: 18px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.25s ease, transform 0.2s ease;
 }
-.task-card:hover { box-shadow: var(--bs-shadow-hover); }
+.task-card:hover {
+  box-shadow: var(--bs-shadow-hover);
+  transform: translateY(-1px);
+}
 /* 终态卡片弱化：降低存在感，视觉焦点留给进行中任务 */
 .task-card[data-status='done'], .task-card[data-status='canceled'] { opacity: 0.72; }
 .task-card[data-status='done']:hover, .task-card[data-status='canceled']:hover { opacity: 1; }
 
 /* ---- 进度环 ---- */
-.tc-ring { position: relative; width: 64px; height: 64px; flex-shrink: 0; }
+.tc-ring { position: relative; width: 64px; height: 64px; flex-shrink: 0; align-self: center; }
 .tc-ring :deep(.el-progress__text) { display: none; }
 .tc-ring-inner {
   position: absolute;
@@ -296,12 +307,13 @@ onBeforeUnmount(() => {
 .tc-ring-mark.canceled { color: var(--bs-text-sub); }
 
 /* ---- 主信息 ---- */
-.tc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.tc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .tc-title-row {
   display: flex;
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+  line-height: 22px;
 }
 .tc-name {
   font-size: 15px;
@@ -332,6 +344,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   font-size: 12.5px;
+  line-height: 18px;
   color: var(--bs-text-sub);
   min-width: 0;
 }
@@ -370,5 +383,5 @@ onBeforeUnmount(() => {
 }
 
 /* ---- 操作区 ---- */
-.tc-ops { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; }
+.tc-ops { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; flex-shrink: 0; }
 </style>
