@@ -15,6 +15,8 @@ import (
 // Store SQLite 存储实例。
 type Store struct {
 	db *sql.DB
+	// walStop 停止周期性 WAL checkpoint（Close 时回收）
+	walStop chan struct{}
 }
 
 // Open 打开（必要时创建）数据库并执行迁移。
@@ -31,11 +33,51 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	// 主动 WAL checkpoint：被动阈值（autocheckpoint 1000 页）会被写入期间的
+	// 其他查询顶掉（实测 WAL 涨到 17MB 后 10 小时无写入仍不回收）——
+	// 启动时 + 每小时 TRUNCATE 模式强制截断 WAL 为 0，控制占盘与崩溃恢复成本
+	s.walStop = make(chan struct{})
+	go s.walCheckpointLoop()
 	return s, nil
 }
 
-// Close 关闭数据库。
-func (s *Store) Close() error { return s.db.Close() }
+// WalCheckpoint 强制 TRUNCATE 模式 checkpoint（WAL 截断为 0 字节）。
+// 单连接模式下无并发读者，理论上总能成功；失败（如瞬时锁）静默等下轮。
+func (s *Store) WalCheckpoint() {
+	var one int
+	if err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&one, &one, &one); err != nil {
+		return
+	}
+}
+
+// walCheckpointLoop 启动先做一次（回收上次运行遗留的 WAL），此后每小时一次。
+func (s *Store) walCheckpointLoop() {
+	// 稍等迁移/启动清理完成再首次 checkpoint，避免抢锁
+	select {
+	case <-time.After(5 * time.Second):
+	case <-s.walStop:
+		return
+	}
+	s.WalCheckpoint()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.WalCheckpoint()
+		case <-s.walStop:
+			return
+		}
+	}
+}
+
+// Close 关闭数据库（停掉 checkpoint 循环 + 关连接）。
+func (s *Store) Close() error {
+	if s.walStop != nil {
+		select { case <-s.walStop: default: close(s.walStop) }
+	}
+	return s.db.Close()
+}
 
 func (s *Store) migrate() error {
 	stmts := []string{

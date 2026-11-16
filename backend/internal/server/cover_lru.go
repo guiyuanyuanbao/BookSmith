@@ -17,8 +17,10 @@ import (
 const (
 	coverMaxEntries = 20000
 	coverMaxBytes   = 1 << 30 // 1GB
-	// memCoverMax 内存热缓存条目上限
-	memCoverMax = 1024
+	// memCoverMax 内存热缓存条目上限；memCoverBytes 字节上限（防大图源 OOM：
+	// 实测单封面可达 1.25MB，1024×1.25MB≈1.28GB 超容器限制）
+	memCoverMax   = 1024
+	memCoverBytes = 64 << 20 // 64MB：按平均 45KB×1024≈46MB 常态留余量，单条超大图自动挤掉最冷
 	// coverFetchConcurrency 远程抓取全局并发上限（防未知质量 URL 一屏并发打挂源站）
 	coverFetchConcurrency = 8
 )
@@ -129,21 +131,27 @@ func (l *CoverLRU) memGet(key string) (coverCacheEntry, bool) {
 	return *e.value, true
 }
 
-// memPut 内存层写（超限淘汰最冷条目，数据随条目释放）。
-func (l *CoverLRU) memPut(key string, e coverCacheEntry) {
+// memPut 内存层写（条目数 + 字节双上限，超限淘汰最冷条目，数据随条目释放）。
+// size 参数用于字节上限记账（漫画站等大图源 1024×1.25MB≈1.28GB 会 OOM）。
+func (l *CoverLRU) memPutSized(key string, e coverCacheEntry, size int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if el, ok := l.items[key]; ok {
 		l.order.MoveToFront(el)
-		el.Value.(*lruEntry).value = &e
+		entry := el.Value.(*lruEntry)
+		l.total += size - entry.size
+		entry.size = size
+		entry.value = &e
+		l.trimMemLocked()
 		return
 	}
-	l.items[key] = l.order.PushFront(&lruEntry{key: key, value: &e})
+	l.items[key] = l.order.PushFront(&lruEntry{key: key, size: size, value: &e})
+	l.total += size
 	l.trimMemLocked()
 }
 
 func (l *CoverLRU) trimMemLocked() {
-	for len(l.items) > l.maxEn {
+	for len(l.items) > l.maxEn || (len(l.items) > 1 && l.total > l.maxBytes) {
 		el := l.order.Back()
 		if el == nil {
 			return
@@ -151,6 +159,7 @@ func (l *CoverLRU) trimMemLocked() {
 		e := el.Value.(*lruEntry)
 		l.order.Remove(el)
 		delete(l.items, e.key)
+		l.total -= e.size
 		if l.evict != nil {
 			l.evict(e.key)
 		}

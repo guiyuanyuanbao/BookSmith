@@ -253,33 +253,89 @@ func (s *App) StartCoverProxy() {
 	})
 	scanCoversDir(coversDir, diskLRU)
 	s.CoverDiskLRU = diskLRU
-	s.CoverMemLRU = NewCoverLRU(memCoverMax, 0, nil) // 内存层仅条目数上限
+	s.CoverMemLRU = NewCoverLRU(memCoverMax, memCoverBytes, nil) // 条目数 + 字节双上限（大图源防 OOM）
 	s.coverFetchSem = make(chan struct{}, coverFetchConcurrency)
 	s.coverInflight = map[string]*coverInflightEntry{}
+	s.coverNegative = map[string]time.Time{}
 }
 
-// coverCacheLookup 三层读取：内存 LRU → 磁盘（+LRU 索引提温）→ 未命中。
+// coverNegativeTTL 负缓存时长：死链/临时失败 URL 在此期间不再重试。
+// 过短起不到保护作用，过长则源站恢复后封面长时间缺失。
+const coverNegativeTTL = 5 * time.Minute
+
+// coverNegativeMax 负缓存条目上限（防爬取大量死链时 map 无限增长；LRU 语义：超限清最旧的）。
+const coverNegativeMax = 4096
+
+// coverNegativeCheck 查负缓存；命中且未过期返回 true。
+func (a *App) coverNegativeCheck(rawURL string) bool {
+	a.coverNegativeMu.Lock()
+	defer a.coverNegativeMu.Unlock()
+	at, ok := a.coverNegative[rawURL]
+	if !ok {
+		return false
+	}
+	if time.Since(at) > coverNegativeTTL {
+		delete(a.coverNegative, rawURL) // 过期惰性清除
+		return false
+	}
+	return true
+}
+
+// coverNegativeMark 记录一次抓取失败（时间戳即写入时间；超限清最旧）。
+func (a *App) coverNegativeMark(rawURL string) {
+	a.coverNegativeMu.Lock()
+	defer a.coverNegativeMu.Unlock()
+	if len(a.coverNegative) >= coverNegativeMax {
+		// 线性清最旧：map 规模有限（4096），比引堆简单且摊销成本低
+		var oldestURL string
+		var oldest time.Time
+		first := true
+		for u, at := range a.coverNegative {
+			if first || at.Before(oldest) {
+				oldestURL, oldest, first = u, at, false
+			}
+		}
+		delete(a.coverNegative, oldestURL)
+	}
+	a.coverNegative[rawURL] = time.Now()
+}
+
+// coverSuccessTTL 成功缓存条目保鲜期：换过图的 URL 不该永远显示旧图（LRU 不淘汰就一直在）。
+// 磁盘文件 mtime 超期即视为失效（删除文件与索引，走重抓路径）；内存条目随磁盘一起失效。
+const coverSuccessTTL = 30 * 24 * time.Hour
+
+// coverCacheLookup 三层读取：内存 LRU → 磁盘（+LRU 索引提温 + TTL 保鲜检查）→ 未命中。
 func (s *App) coverCacheLookup(rawURL string) ([]byte, string, bool) {
 	if e, ok := s.CoverMemLRU.memGet(rawURL); ok {
 		return e.data, e.httpType, true
+	}
+	p := coverCachePath(s.DataDir, rawURL)
+	if fi, err := os.Stat(p); err == nil && time.Since(fi.ModTime()) > coverSuccessTTL {
+		// 旧图过期：删文件与索引，走重抓（下次封面更新后自然刷新）
+		_ = os.Remove(p)
+		if s.CoverDiskLRU != nil {
+			s.CoverDiskLRU.Remove(coverCacheFileKey(s.DataDir, rawURL))
+		}
+		s.CoverMemLRU.Remove(rawURL)
+		return nil, "", false
 	}
 	if d, m, ok := coverCacheGet(s.DataDir, rawURL); ok {
 		if s.CoverDiskLRU != nil {
 			s.CoverDiskLRU.Touch(coverCacheFileKey(s.DataDir, rawURL), int64(len(d)))
 		}
-		s.CoverMemLRU.memPut(rawURL, coverCacheEntry{data: d, httpType: m})
+		s.CoverMemLRU.memPutSized(rawURL, coverCacheEntry{data: d, httpType: m}, int64(len(d)))
 		return d, m, true
 	}
 	return nil, "", false
 }
 
-// coverCacheStore 两级写入：磁盘文件 + LRU 索引 + 内存热缓存。
+// coverCacheStore 两级写入：磁盘文件 + LRU 索引 + 内存热缓存（字节记账防 OOM）。
 func (s *App) coverCacheStore(rawURL string, data []byte, mime string) {
 	coverCachePut(s.DataDir, rawURL, data, mime)
 	if s.CoverDiskLRU != nil {
 		s.CoverDiskLRU.Touch(coverCacheFileKey(s.DataDir, rawURL), int64(len(data)))
 	}
-	s.CoverMemLRU.memPut(rawURL, coverCacheEntry{data: data, httpType: mime})
+	s.CoverMemLRU.memPutSized(rawURL, coverCacheEntry{data: data, httpType: mime}, int64(len(data)))
 }
 
 func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +377,10 @@ type coverInflightEntry struct {
 // fetchCoverDeduped 同 URL 并发 miss 只抓一次：首个请求者持锁抓取（受全局信号量约束），
 // 其余等待其完成并共享结果。缓存已命中则直接返回（不进入去重通道）。
 func (a *App) fetchCoverDeduped(rawURL string) ([]byte, string, bool) {
+	// 负缓存：近期失败（死链/临时故障）的 URL 不再占用并发槽与重试成本
+	if a.coverNegativeCheck(rawURL) {
+		return nil, "", false
+	}
 	a.coverInflightMu.Lock()
 	if e, ok := a.coverInflight[rawURL]; ok {
 		a.coverInflightMu.Unlock()
@@ -335,6 +395,9 @@ func (a *App) fetchCoverDeduped(rawURL string) ([]byte, string, bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[cover-fetch] 抓取 %s 内部异常: %v", rawURL, r) // 等待者拿到 ok=false（502），但 panic 不再静默
+		}
+		if !e.ok {
+			a.coverNegativeMark(rawURL) // 失败入负缓存（成功路径不记）
 		}
 		a.coverInflightMu.Lock()
 		delete(a.coverInflight, rawURL)

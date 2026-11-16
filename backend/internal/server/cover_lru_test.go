@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"booksmith/internal/model"
 )
@@ -84,7 +85,7 @@ func TestMemCoverLRU_SingleEntryEviction(t *testing.T) {
 	lru := NewCoverLRU(memCoverMax, 0, nil)
 	// 写超限（memCoverMax=1024，写 1200 条）→ 只驱逐最旧，不整体清空
 	for i := 0; i < memCoverMax+200; i++ {
-		lru.memPut(fmt.Sprintf("k%d", i), coverCacheEntry{data: []byte("x"), httpType: "image/jpeg"})
+		lru.memPutSized(fmt.Sprintf("k%d", i), coverCacheEntry{data: []byte("x"), httpType: "image/jpeg"}, 1)
 	}
 	if lru.Len() > memCoverMax {
 		t.Fatalf("内存缓存不应超过 %d 条，实际 %d", memCoverMax, lru.Len())
@@ -93,9 +94,9 @@ func TestMemCoverLRU_SingleEntryEviction(t *testing.T) {
 		t.Fatalf("应逐条驱逐而非整体清空，实际剩余 %d", lru.Len())
 	}
 	// 热键命中提温后仍在
-	lru.memPut("hot", coverCacheEntry{data: []byte("h"), httpType: "image/jpeg"})
+	lru.memPutSized("hot", coverCacheEntry{data: []byte("h"), httpType: "image/jpeg"}, 1)
 	for i := 0; i < memCoverMax+200; i++ {
-		lru.memPut(fmt.Sprintf("k%d", i), coverCacheEntry{data: []byte("y"), httpType: "image/jpeg"})
+		lru.memPutSized(fmt.Sprintf("k%d", i), coverCacheEntry{data: []byte("y"), httpType: "image/jpeg"}, 1)
 		if _, ok := lru.memGet("hot"); !ok {
 			t.Fatalf("热键在第 %d 次写入后被驱逐", i)
 		}
@@ -117,6 +118,64 @@ func TestScanCoversDir_IndexesExistingFiles(t *testing.T) {
 	scanCoversDir(coversDir, lru)
 	if lru.Len() != 2 {
 		t.Fatalf("应索引 2 个 .img 文件（忽略 .txt），实际 %d", lru.Len())
+	}
+}
+
+// 内存层字节上限：大图源（如单张 1MB）写满 1024 条会 OOM——字节超限须驱逐最冷条目。
+func TestMemCoverLRU_ByteLimitEviction(t *testing.T) {
+	lru := NewCoverLRU(1024, 64<<20, nil) // 1024 条 / 64MB
+	big := make([]byte, 1<<20)            // 1MB
+	for i := 0; i < 200; i++ {
+		lru.memPutSized(fmt.Sprintf("big%d", i), coverCacheEntry{data: big, httpType: "image/jpeg"}, int64(len(big)))
+	}
+	if lru.Len() > 64 {
+		t.Fatalf("64MB 上限下 1MB×200 应只留 ~64 条，实际 %d", lru.Len())
+	}
+}
+
+// 负缓存：失败 URL 在 TTL 内不再重试；过期后恢复重试。
+func TestCoverNegativeCache(t *testing.T) {
+	app, _ := newCoverTestApp(t)
+	app.StartCoverProxy()
+	u := "http://example.com/dead.jpg"
+	if app.coverNegativeCheck(u) {
+		t.Fatal("未标记的 URL 不应命中负缓存")
+	}
+	app.coverNegativeMark(u)
+	if !app.coverNegativeCheck(u) {
+		t.Fatal("标记后应命中负缓存")
+	}
+	// 手动过期
+	app.coverNegativeMu.Lock()
+	app.coverNegative[u] = time.Now().Add(-coverNegativeTTL - time.Minute)
+	app.coverNegativeMu.Unlock()
+	if app.coverNegativeCheck(u) {
+		t.Fatal("过期后不应再命中")
+	}
+}
+
+// 成功 TTL：磁盘文件 mtime 超 30 天 → 缓存失效重抓（换图 URL 可刷新）。
+func TestCoverSuccessTTL(t *testing.T) {
+	app, _ := newCoverTestApp(t)
+	app.StartCoverProxy()
+	u := "http://example.com/old.jpg"
+	app.coverCacheStore(u, []byte("imgdata"), "image/jpeg")
+	if d, _, ok := app.coverCacheLookup(u); !ok || string(d) != "imgdata" {
+		t.Fatal("新缓存应命中")
+	}
+	// 把磁盘文件 mtime 拨回 31 天前
+	p := coverCachePath(app.DataDir, u)
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	if err := os.Chtimes(p, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// 内存条目还在，先清掉以强制走磁盘路径
+	app.CoverMemLRU.Remove(u)
+	if _, _, ok := app.coverCacheLookup(u); ok {
+		t.Fatal("超 TTL 的缓存应失效")
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatal("过期文件应被删除")
 	}
 }
 

@@ -54,6 +54,10 @@ type App struct {
 	// coverInflight 同 URL 抓取去重：并发 miss 只抓一次，其余等待共享结果
 	coverInflightMu sync.Mutex
 	coverInflight   map[string]*coverInflightEntry
+	// coverNegative 负缓存：近期抓取失败的 URL（死链每次重试 200-350ms 还占并发槽，
+	// 几个慢源就能堵住 8 槽通道）——失败后 5 分钟内直接返回未命中不再重试
+	coverNegativeMu sync.Mutex
+	coverNegative   map[string]time.Time
 }
 
 // FindEnabledSources 启用书源列表（webbook.Search 输入）。
