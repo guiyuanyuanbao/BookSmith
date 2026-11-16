@@ -58,7 +58,7 @@ async function login() {
   <div class="login-wrap">
     <div v-if="checking" class="login-card muted">检查鉴权状态…</div>
     <div v-else class="login-card">
-      <div class="login-logo">📚</div>
+      <img class="login-logo" src="/logo.svg" alt="BookSmith" />
       <h1 class="login-title">BookSmith</h1>
       <p class="login-sub">本站已开启访问保护，请输入访问密钥</p>
       <el-input
@@ -94,7 +94,7 @@ async function login() {
   box-shadow: var(--bs-shadow);
   text-align: center;
 }
-.login-logo { font-size: 44px; }
+.login-logo { width: 64px; height: 64px; }
 .login-title {
   font-family: 'Noto Serif SC', serif;
   font-size: 26px;

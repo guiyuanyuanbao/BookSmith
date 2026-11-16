@@ -1,4 +1,10 @@
-# 📚 BookSmith · 书籍工坊
+<div align="center">
+
+<img src="frontend/public/logo.svg" width="120" alt="BookSmith logo" />
+
+# BookSmith · 书籍工坊
+
+</div>
 
 > 以「开源阅读」(legado) 规则引擎为核心的书籍获取与电子书制作系统。
 > **纯 Go 原生实现（零桥接）** + Vue 3 前端，单二进制分发。

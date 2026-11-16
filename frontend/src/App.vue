@@ -64,7 +64,7 @@ const navs = computed(() => [
   <el-container v-else style="height: 100%">
     <el-aside :width="collapsed ? '64px' : '216px'" class="sidebar">
       <div class="logo" :class="{ mini: collapsed }">
-        <span class="logo-icon">📚</span>
+        <img class="logo-icon" src="/logo.svg" alt="BookSmith" />
         <div v-if="!collapsed" class="logo-text">
           <div class="logo-name">BookSmith</div>
           <div class="logo-slogan">书籍工坊</div>
@@ -106,16 +106,19 @@ const navs = computed(() => [
 .logo {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 26px 20px 20px;
+  gap: 10px;
+  padding: 22px 16px 18px;
+  min-width: 0;
 }
 .logo.mini { justify-content: center; padding: 26px 0 20px; }
-.logo-icon { font-size: 30px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); }
+.logo-icon { width: 34px; height: 34px; flex-shrink: 0; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3)); }
+.logo-text { min-width: 0; }
 .logo-name {
   color: #f5f2ea;
   font-size: 19px;
   font-weight: 700;
   letter-spacing: 0.5px;
+  white-space: nowrap;
   font-family: 'Noto Serif SC', serif;
 }
 .logo-slogan { color: #7fa89a; font-size: 11px; margin-top: 2px; }
