@@ -94,7 +94,7 @@ async function login() {
   box-shadow: var(--bs-shadow);
   text-align: center;
 }
-.login-logo { width: 64px; height: 64px; }
+.login-logo { display: block; margin: 0 auto 4px; width: 64px; height: 64px; }
 .login-title {
   font-family: 'Noto Serif SC', serif;
   font-size: 26px;

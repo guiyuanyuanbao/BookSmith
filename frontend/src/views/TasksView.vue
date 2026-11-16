@@ -7,6 +7,8 @@ import { fmtColor } from '@/composables/formatters'
 const tasks = ref<DownloadTask[]>([])
 const filterTab = ref<'all' | 'active' | 'done'>('all')
 const loading = ref(false)
+// 首次 load 完成前不显示空态（否则闪「暂无任务」）
+const loadedOnce = ref(false)
 let timer: number | null = null
 let closeSSE: (() => void) | null = null
 const startTimes = new Map<number, number>()
@@ -48,6 +50,14 @@ async function load() {
   try {
     tasks.value = (await api.listTasks()) ?? []
     tasks.value.forEach(trackStart)
+    // startTimes 仅服务 running 速度计算：非 running 的旧条目定期清理，防长会话无限增长
+    if (tasks.value.length) {
+      const active = new Set(tasks.value.filter((t) => t.status === 'running').map((t) => t.id))
+      for (const id of startTimes.keys()) {
+        if (!active.has(id)) startTimes.delete(id)
+      }
+    }
+    loadedOnce.value = true
   } catch {
     /* 轮询容错 */
   }
@@ -118,12 +128,18 @@ const failTask = ref<DownloadTask | null>(null)
 async function showFailures(t: DownloadTask) {
   failTask.value = t
   failDlg.value = true
+  failShown.value = failChunk // 重置分块游标
   try {
     failList.value = (await api.taskFailures(t.id)) ?? []
   } catch (e: any) {
     ElMessage.error(e.message)
   }
 }
+
+// 失败章节分块渲染：死源任务可整本失败（上千行），一次性渲染冻结主线程
+const failChunk = 200
+const failShown = ref(failChunk)
+const failShownList = computed(() => failList.value.slice(0, failShown.value))
 
 // 是否存在可显示的操作按钮（终态卡无按钮时整个容器不渲染，省掉 16px 死间隙）
 function hasOps(t: DownloadTask) {
@@ -242,10 +258,14 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <el-empty v-if="!loading && tasks.length === 0" description="暂无任务 — 从搜索或书架发起下载" />
+    <el-empty v-if="loadedOnce && !loading && tasks.length === 0" description="暂无任务 — 从搜索或书架发起下载" />
 
     <el-dialog v-model="failDlg" :title="`失败章节 · ${failTask?.bookName ?? ''}`" width="560">
-      <el-table :data="failList" max-height="420">
+      <div v-if="failList.length > failChunk" class="muted" style="margin-bottom: 8px">
+        已渲染 {{ Math.min(failShown, failList.length) }} / {{ failList.length }} 条
+        <el-button v-if="failShown < failList.length" size="small" text type="primary" @click="failShown += failChunk">继续加载</el-button>
+      </div>
+      <el-table :data="failShownList" max-height="420">
         <el-table-column prop="index" label="#" width="70" />
         <el-table-column prop="title" label="章节" min-width="180" show-overflow-tooltip />
         <el-table-column prop="errMsg" label="错误" min-width="220" show-overflow-tooltip />

@@ -156,6 +156,8 @@ async function runSearch() {
   started.value = true
   loading.value = true
   job.value = null
+  page.value = 1 // 新搜索回第 1 页（上次翻到第 5 页时重搜会直接显示第 81-100 条，像"结果变少"）
+  triedCovers.clear() // 单次搜索内防重试风暴；跨搜索清空——代理恢复后同书封面应可重试
   // 先关上一条 SSE：每次搜索都新建 EventSource，不关会泄漏连接
   // （浏览器同源 HTTP/1.1 限 6 连接，泄漏 5-6 次后所有轮询/封面/新 SSE 全部挂起）
   closeSSE?.()
@@ -525,7 +527,7 @@ onBeforeUnmount(() => {
         @keyup.enter="doSearch"
       >
         <template #append>
-          <el-button :icon="Search" :loading="loading" @click="doSearch">搜索</el-button>
+          <el-button class="hero-search-btn" :icon="Search" :loading="loading" @click="doSearch">搜索</el-button>
         </template>
       </el-input>
       <el-button v-if="loading" :icon="VideoPause" @click="cancelSearch">取消</el-button>
@@ -847,7 +849,11 @@ onBeforeUnmount(() => {
   background: var(--el-color-primary);
   border: none;
   color: #fff;
-  padding: 18px 22px;
+  /* append 高度固定：不用垂直 padding 撑高（会挤压行盒导致文字下沉偏移），
+     满高 + flex 居中由 el-button 自身完成 */
+  height: 100%;
+  min-height: 40px;
+  padding: 0 22px;
   font-weight: 600;
   border-radius: 9px;
 }
@@ -901,6 +907,7 @@ onBeforeUnmount(() => {
 /* 固定占位高度：历史异步载入不引起布局跳动 */
 .hero-hints {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   align-items: center;
   min-height: 32px;

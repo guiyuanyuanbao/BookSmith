@@ -26,12 +26,14 @@ function go(path: string) {
 }
 
 async function load() {
-  loading.value = true
+  // 快速返回（<150ms）时遮罩一闪反而刺眼：短延迟内完成就不显示 loading
+  const showTimer = window.setTimeout(() => { loading.value = true }, 150)
   try {
     data.value = await api.overview()
   } catch (e: any) {
     ElMessage.error(e.message)
   } finally {
+    window.clearTimeout(showTimer)
     loading.value = false
   }
 }

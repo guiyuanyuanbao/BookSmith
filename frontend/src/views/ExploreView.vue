@@ -172,6 +172,8 @@ async function loadBooks(p: number, append: boolean) {
     pollingJobId = r.exploreId
     page.value = p
     if (!append) books.value = []
+    // await 期间可能已有旧 interval 建立（快速连点），赋值前先清，防句柄覆盖泄漏
+    stopPoll()
     pollTimer = window.setInterval(() => pollOnce(), 1200)
     // 兜底：3s 后还没结果就主动 poll 一次（句柄被 stopPoll 管理，不会与 interval 叠加）
     pollFallbackTimer = window.setTimeout(() => { if (loadingBooks.value) pollOnce() }, 3000)
@@ -274,7 +276,7 @@ onBeforeUnmount(stopPoll)
             <CoverThumb :src="coverOf(b)" :name="b.name" @error="hideCover" />
             <div class="explore-card-name" :title="b.name">{{ b.name }}</div>
             <div class="muted" style="font-size: 12px">{{ b.author || '未知' }}</div>
-            <el-tag size="small" type="info" class="explore-card-src">{{ b.sourceName }}</el-tag>
+            <el-tag size="small" type="info" class="explore-card-src" :title="b.sourceName"><span class="explore-card-src-text">{{ b.sourceName }}</span></el-tag>
           </div>
         </div>
         <!-- 加载更多：在所有书之后（网格底部），追加失败也不清空已有内容 -->
@@ -361,5 +363,13 @@ onBeforeUnmount(stopPoll)
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.explore-card-src { margin-top: 3px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* el-tag 是 flex 容器，text-overflow 需落在内层块元素上才生效 */
+.explore-card-src { margin-top: 3px; max-width: 100%; }
+.explore-card-src-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>

@@ -141,6 +141,7 @@ async function importSelectedYioveSources() {
   const meta = yioveProvider.value?.sourceList
   if (!meta) return
   for (const item of list) {
+    if (!cleanupAlive) break // 页面已卸载：不再起后续任务（否则重入守卫逐项弹警告）
     // 走 syncRepo：负责置 syncJob + 启动轮询（直调 syncRepoStart 会让等待条件恒真、并发打满）
     try {
       await syncRepo(
@@ -323,6 +324,12 @@ async function load() {
     if (seq !== loadSeq) return // 已有更新的请求在途，丢弃旧响应
     items.value = r.items ?? []
     total.value = r.total
+    // 末页删除/过滤后页码越界 → 回到最后一个非空页（否则白页且分页器停在越界页）
+    const maxPage = Math.max(1, Math.ceil(total.value / pageSize))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      load()
+    }
   } catch (e: any) {
     if (seq === loadSeq) ElMessage.error(e.message)
   } finally {
@@ -409,6 +416,11 @@ async function doImport() {
 
 async function openRepos() {
   reposDlg.value = true
+  // 上次同步仍在跑（对话框关闭期间完成无人知晓 → running 冻结 true → 按钮永久禁用）：
+  // 重开时恢复轮询，让状态面板与按钮解锁路径闭环
+  if (syncJob.value?.progress.running && syncPollTimer === null && syncJob.value.id) {
+    syncPollTimer = window.setInterval(() => pollSyncJob(syncJob.value!.id), 1000)
+  }
   await loadRepos(false)
 }
 
@@ -489,6 +501,7 @@ async function syncSelectedRepos() {
   const list = selectedRepos.value
   if (!list.length) return
   for (const repo of list) {
+    if (!cleanupAlive) break // 页面已卸载：不再起后续任务
     await syncRepo(repo, false)
     // 等当前任务完成再继续（轮询中 progress.finished 置位；卸载后中止防 interval 泄漏）
     await new Promise<void>((resolve) => {
@@ -713,7 +726,7 @@ onMounted(() => {
 
               <!-- 全量单源列表视图：搜索 + 分页导入 -->
               <template v-if="yioveView === 'list'">
-                <div style="display: flex; gap: 8px; margin-bottom: 10px">
+                <div style="display: flex; gap: 8px; margin-bottom: 10px; align-items: center">
                   <el-input
                     v-model="yioveSearchKeyword"
                     placeholder="按书源名称搜索（如：笔趣阁）"

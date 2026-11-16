@@ -107,10 +107,9 @@ const tasksStore = useTasksStore()
       <el-button @click="load">刷新</el-button>
     </div>
 
-    <div v-if="loading" style="padding: 40px 0; text-align: center" class="muted">加载中…</div>
-    <el-empty v-else-if="!filtered.length" description="还没有导出文件，去书架导出或搜索下载新书吧" />
+    <div class="file-list" v-loading="loading">
+      <el-empty v-if="!filtered.length && !loading" description="还没有导出文件，去书架导出或搜索下载新书吧" />
 
-    <div v-else class="file-list">
       <div v-for="e in filtered" :key="e.id" class="file-row">
         <FmtTag :format="e.format" />
         <div class="file-main">

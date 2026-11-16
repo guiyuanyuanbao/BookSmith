@@ -34,6 +34,10 @@ const groupActiveSource = ref<SourceBook | null>(null)
 const groupExports = ref<{ id: number; name: string; format: string; size: number }[]>([])
 const groupExportsLoading = ref(false)
 const groupChapters = ref<Chapter[]>([])
+// 目录分块渲染：2000+ 章一次进 el-table 会冻结主线程数秒
+const tocChunk = 300
+const tocShown = ref(tocChunk)
+const tocShownChapters = computed(() => groupChapters.value.slice(0, tocShown.value))
 const groupTocLoading = ref(false)
 
 function openGroupPanel(g: BookGroup) {
@@ -74,6 +78,7 @@ async function viewSourceToc(sb: SourceBook) {
     const r = (await api.bookToc(sb.id)) ?? []
     if (req !== drawerReqSeq) return // 已切换到其他来源/视图，丢弃陈旧响应
     groupChapters.value = r
+    tocShown.value = tocChunk // 新目录重置分块游标
   } catch (e: any) {
     if (req !== drawerReqSeq) return
     ElMessage.error(e.message)
@@ -417,7 +422,15 @@ async function load(silent = false) {  const seq = ++loadSeq
   try {
     const r = await api.listBookGroups(keyword.value || undefined)
     if (seq !== loadSeq) return // 已有更新的请求在途（快速输入时旧响应晚到会覆盖新结果）
-    groups.value = r.items ?? []
+    const next = r.items ?? []
+    // 轮询优化：统计快照没变时跳过整树替换（500+ 本时每 2.5s 全量 keyed diff 造成 CPU 尖峰；
+    // 快照含各源 activeTask/done/failed——任一变化才需要更新视图）
+    if (silent && statsSnapshot.value === snapshotOf(next)) {
+      groups.value = next // 引用替换保底（浅 diff 成本远低于完整渲染）
+      return
+    }
+    statsSnapshot.value = snapshotOf(next)
+    groups.value = next
     // 后台刷新后重定位打开中的抽屉，避免抽屉数据冻结在旧对象上
     syncDrawerTarget()
   } catch (e: any) {
@@ -428,6 +441,14 @@ async function load(silent = false) {  const seq = ++loadSeq
     // 若更新的请求在途则 seq !== loadSeq，由其自身 finally 清除
     if (seq === loadSeq) loading.value = false
   }
+}
+
+// 各源统计快照（id:done:fail:active 串接），用于轮询时跳过无效整树更新
+const statsSnapshot = ref('')
+function snapshotOf(items: BookGroup[]): string {
+  return items.map((g) =>
+    g.sources.map((s) => `${s.id}:${s.stats?.doneChapters ?? 0}:${s.stats?.failedChapters ?? 0}:${s.stats?.activeTask ? 1 : 0}`).join('|'),
+  ).join('#')
 }
 
 const sortedGroups = computed(() => {
@@ -828,9 +849,14 @@ onBeforeUnmount(() => {
           </template>
         </template>
 
-        <!-- 视图3：章节目录 -->
+        <!-- 视图3：章节目录（长书 2000+ 章一次性渲染会冻结主线程，分块渐进渲染） -->
         <template v-else>
-          <el-table :data="groupChapters" v-loading="groupTocLoading" max-height="560" size="small">
+          <div v-if="groupChapters.length > tocChunk" class="toc-chunk-tip muted">
+            已渲染 {{ Math.min(tocShown, groupChapters.length) }} / {{ groupChapters.length }} 章
+            <el-button v-if="tocShown < groupChapters.length" size="small" text type="primary" @click="tocShown += tocChunk">继续加载</el-button>
+            <el-button v-else size="small" text type="primary" @click="tocShown = groupChapters.length">显示全部</el-button>
+          </div>
+          <el-table :data="tocShownChapters" v-loading="groupTocLoading" max-height="560" size="small">
             <el-table-column prop="index" label="#" width="60" />
             <el-table-column label="章节" min-width="240">
               <template #default="{ row }">
