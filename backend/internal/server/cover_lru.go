@@ -18,9 +18,10 @@ const (
 	coverMaxEntries = 20000
 	coverMaxBytes   = 1 << 30 // 1GB
 	// memCoverMax 内存热缓存条目上限；memCoverBytes 字节上限（防大图源 OOM：
-	// 实测单封面可达 1.25MB，1024×1.25MB≈1.28GB 超容器限制）
-	memCoverMax   = 1024
-	memCoverBytes = 64 << 20 // 64MB：按平均 45KB×1024≈46MB 常态留余量，单条超大图自动挤掉最冷
+	// 实测单封面可达 1.25MB，无字节上限时 1024×1.25MB≈1.28GB 超容器限制）
+	memCoverMax   = 2048
+	memCoverBytes = 256 << 20 // 256MB：常态 45KB×2048≈92MB 只占一半，大图源也有充足缓冲；
+	// 字节上限是硬防波堤而非常态预算——最坏情况（全是大图）下进程 RSS 增长可控且冷条目自动让路
 	// coverFetchConcurrency 远程抓取全局并发上限（防未知质量 URL 一屏并发打挂源站）
 	coverFetchConcurrency = 8
 )

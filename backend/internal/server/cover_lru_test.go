@@ -121,15 +121,15 @@ func TestScanCoversDir_IndexesExistingFiles(t *testing.T) {
 	}
 }
 
-// 内存层字节上限：大图源（如单张 1MB）写满 1024 条会 OOM——字节超限须驱逐最冷条目。
+// 内存层字节上限：大图源（如单张 1MB）写满条目上限会 OOM——字节超限须驱逐最冷条目。
 func TestMemCoverLRU_ByteLimitEviction(t *testing.T) {
-	lru := NewCoverLRU(1024, 64<<20, nil) // 1024 条 / 64MB
-	big := make([]byte, 1<<20)            // 1MB
-	for i := 0; i < 200; i++ {
+	lru := NewCoverLRU(2048, 256<<20, nil) // 2048 条 / 256MB
+	big := make([]byte, 1<<20)             // 1MB
+	for i := 0; i < 500; i++ {
 		lru.memPutSized(fmt.Sprintf("big%d", i), coverCacheEntry{data: big, httpType: "image/jpeg"}, int64(len(big)))
 	}
-	if lru.Len() > 64 {
-		t.Fatalf("64MB 上限下 1MB×200 应只留 ~64 条，实际 %d", lru.Len())
+	if lru.Len() > 256 {
+		t.Fatalf("256MB 上限下 1MB×500 应只留 ~256 条，实际 %d", lru.Len())
 	}
 }
 
