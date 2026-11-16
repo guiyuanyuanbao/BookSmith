@@ -131,6 +131,22 @@ async function remove(rule: ReplaceRule) {
   }
 }
 
+// 行内启用开关：乐观更新（开关立即响应），失败回滚
+const togglingId = ref<number | null>(null)
+async function toggleEnabled(rule: ReplaceRule) {
+  const next = !rule.isEnabled
+  togglingId.value = rule.id
+  try {
+    await api.saveReplace({ ...rule, isEnabled: next })
+    rule.isEnabled = next
+    ElMessage.success(next ? `已启用「${rule.name}」` : `已停用「${rule.name}」`)
+  } catch (e: any) {
+    ElMessage.error(e.message)
+  } finally {
+    togglingId.value = null
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -146,7 +162,7 @@ onMounted(load)
       <el-button @click="importDlg = true">导入规则</el-button>
     </div>
 
-    <el-table :data="rules" v-loading="loading">
+    <el-table :data="rules" v-loading="loading" :row-class-name="({ row }: { row: ReplaceRule }) => (row.isEnabled ? '' : 'rule-disabled')">
       <el-table-column prop="order" label="顺序" width="70" />
       <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
       <el-table-column prop="pattern" label="匹配" min-width="200" show-overflow-tooltip />
@@ -166,6 +182,16 @@ onMounted(load)
           <el-tag size="small" :type="row.scopeTitle ? 'success' : 'primary'">
             {{ row.scopeTitle ? '标题' : '正文' }}
           </el-tag>
+        </template>
+      </el-table-column>
+      <!-- 启用开关：直接行内切换，禁用规则一目了然（此前只能进编辑对话框且无开关可切） -->
+      <el-table-column label="启用" width="80" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="row.isEnabled"
+            :loading="togglingId === row.id"
+            @change="toggleEnabled(row)"
+          />
         </template>
       </el-table-column>
       <el-table-column label="操作" width="130">
@@ -229,6 +255,9 @@ onMounted(load)
         <el-form-item label="正则模式">
           <el-switch v-model="editing.isRegex" />
         </el-form-item>
+        <el-form-item label="启用规则">
+          <el-switch v-model="editing.isEnabled" />
+        </el-form-item>
         <el-form-item label="作用于正文">
           <el-switch v-model="editing.scopeContent" />
         </el-form-item>
@@ -253,3 +282,9 @@ onMounted(load)
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+/* 禁用行整体置灰：与启用的区分一目了然 */
+:deep(.rule-disabled) { opacity: 0.55; }
+:deep(.rule-disabled) .cell { color: var(--bs-text-sub); }
+</style>
